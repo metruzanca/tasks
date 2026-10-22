@@ -1,0 +1,179 @@
+syntax = "proto3";
+
+package tasks.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/metruzanca/tasks/pkg/sdk/pb;pb";
+
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_NONE = 1;
+  PRIORITY_LOW = 2;
+  PRIORITY_MEDIUM = 3;
+  PRIORITY_HIGH = 4;
+  PRIORITY_URGENT = 5;
+}
+
+enum ColumnCategory {
+  COLUMN_CATEGORY_UNSPECIFIED = 0;
+  COLUMN_CATEGORY_TODO = 1;
+  COLUMN_CATEGORY_IN_PROGRESS = 2;
+  COLUMN_CATEGORY_DONE = 3;
+  COLUMN_CATEGORY_OTHER = 4;
+}
+
+message Column {
+  string id = 1;
+  string name = 2;
+  double position = 3;
+  ColumnCategory category = 4;
+}
+
+message Capabilities {
+  bool comments = 1;
+  bool labels = 2;
+  bool assignee = 3;
+  bool ordering = 4;
+  bool archive = 5;
+  bool priority = 6;
+  bool search = 7;
+}
+
+message BackendInfo {
+  string name = 1;
+  string display_name = 2;
+  string version = 3;
+  int32 protocol_version = 4;
+  string board_name = 5;
+  string board_url = 6;
+  repeated Column columns = 7;
+  Capabilities capabilities = 8;
+  string ready_status = 9;
+}
+
+message Task {
+  string id = 1;
+  string key = 2;
+  string title = 3;
+  string description = 4;
+  string status = 5;
+  double position = 6;
+  Priority priority = 7;
+  repeated string labels = 8;
+  string assignee = 9;
+  string url = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  bool archived = 13;
+  int32 comment_count = 14;
+}
+
+message Comment {
+  string id = 1;
+  string author = 2;
+  string body = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message TaskFilter {
+  repeated string statuses = 1;
+  repeated string labels = 2;
+  string assignee = 3;
+  Priority priority = 4;
+  bool has_priority = 5;
+  string search = 6;
+  bool include_archived = 7;
+  int32 limit = 8;
+  int32 offset = 9;
+}
+
+message DescribeRequest {}
+
+message SetupRequest {
+  bool create_missing = 1;
+}
+
+message SetupResponse {
+  repeated string messages = 1;
+}
+
+message ListTasksRequest {
+  TaskFilter filter = 1;
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;
+}
+
+message GetTaskRequest {
+  string id = 1;
+}
+
+message CreateTaskRequest {
+  string title = 1;
+  string description = 2;
+  string status = 3;
+  Priority priority = 4;
+  repeated string labels = 5;
+  string assignee = 6;
+}
+
+message UpdateTaskRequest {
+  string id = 1;
+  optional string title = 2;
+  optional string description = 3;
+  optional Priority priority = 4;
+  optional string assignee = 5;
+  bool clear_assignee = 6;
+  repeated string labels = 7;
+  bool set_labels = 8;
+}
+
+message MoveTaskRequest {
+  string id = 1;
+  string status = 2;
+  optional string before_id = 3;
+  optional string after_id = 4;
+}
+
+message DeleteTaskRequest {
+  string id = 1;
+  bool hard = 2;
+}
+
+message DeleteTaskResponse {}
+
+message AddCommentRequest {
+  string task_id = 1;
+  string body = 2;
+}
+
+message ListCommentsRequest {
+  string task_id = 1;
+}
+
+message ListCommentsResponse {
+  repeated Comment comments = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+service Backend {
+  rpc Describe(DescribeRequest) returns (BackendInfo);
+  rpc Setup(SetupRequest) returns (SetupResponse);
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc GetTask(GetTaskRequest) returns (Task);
+  rpc CreateTask(CreateTaskRequest) returns (Task);
+  rpc UpdateTask(UpdateTaskRequest) returns (Task);
+  rpc MoveTask(MoveTaskRequest) returns (Task);
+  rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
+  rpc AddComment(AddCommentRequest) returns (Comment);
+  rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}

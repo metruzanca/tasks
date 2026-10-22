@@ -1,0 +1,8 @@
+/bin/
+/dist/
+/.tools/
+/plugins/tasks-plugin-*
+/tasks-plugin-*
+*.db
+*.db-shm
+*.db-wal
