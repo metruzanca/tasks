@@ -53,5 +53,5 @@ tasks comments <id> --json
 tasks columns --json
 ```
 
-IDs look like `T-12` for SQLite and `42` / `#42` for GitHub. Use the ID printed
-by `add` or returned in JSON.
+IDs look like `T-12` for SQLite, `42` / `#42` for GitHub, and `ENG-123` for
+Linear. Use the ID printed by `add` or returned in JSON.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -64,14 +65,10 @@ func New(cfg Config) (*Backend, error) {
 	if cfg.PriorityField == "" {
 		cfg.PriorityField = "Priority"
 	}
-	token, err := resolveToken(cfg.TokenEnv)
-	if err != nil {
-		return nil, err
-	}
-	return &Backend{cfg: cfg, client: newClient(cfg, token)}, nil
+	return &Backend{cfg: cfg, client: newClient(cfg)}, nil
 }
 
-func resolveToken(envName string) (string, error) {
+func resolveToken(ctx context.Context, envName string) (string, error) {
 	if envName != "" {
 		if v := os.Getenv(envName); v != "" {
 			return v, nil
@@ -83,12 +80,15 @@ func resolveToken(envName string) (string, error) {
 			return v, nil
 		}
 	}
-	if out, err := execCommand("gh", "auth", "token"); err == nil {
+	if creds, err := sdk.LoadCredential("github"); err == nil && creds["token"] != "" {
+		return creds["token"], nil
+	}
+	if out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output(); err == nil {
 		if t := strings.TrimSpace(string(out)); t != "" {
 			return t, nil
 		}
 	}
-	return "", errors.New("no GitHub token found: set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`")
+	return "", errors.New("no GitHub token found: run `tasks login github`, set GH_TOKEN/GITHUB_TOKEN, or run `gh auth login`")
 }
 
 func (b *Backend) Describe(ctx context.Context) (*pb.BackendInfo, error) {
@@ -407,8 +407,8 @@ func (b *Backend) ListComments(ctx context.Context, taskID string) ([]*pb.Commen
 }
 
 func (b *Backend) Health(ctx context.Context) error {
-	if b.client.token == "" {
-		return errors.New("missing GitHub token")
+	if _, err := b.client.authToken(ctx); err != nil {
+		return err
 	}
 	if _, err := b.client.project(ctx); err != nil {
 		return err

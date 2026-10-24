@@ -164,6 +164,23 @@ message HealthResponse {
   string message = 2;
 }
 
+message LoginRequest {
+  string input = 1;
+  bool has_input = 2;
+}
+
+message LoginResponse {
+  bool done = 1;
+  string prompt = 2;
+  bool secret = 3;
+  string message = 4;
+  string url = 5;
+}
+
+service Auth {
+  rpc Login(LoginRequest) returns (LoginResponse);
+}
+
 service Backend {
   rpc Describe(DescribeRequest) returns (BackendInfo);
   rpc Setup(SetupRequest) returns (SetupResponse);

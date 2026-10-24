@@ -62,6 +62,8 @@ func (a *App) root() *cobra.Command {
 		a.columnsCmd(),
 		a.boardCmd(),
 		a.pluginCmd(),
+		a.loginCmd(),
+		a.logoutCmd(),
 		a.doctorCmd(),
 		a.skillCmd(),
 		a.configCmd(),

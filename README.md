@@ -18,10 +18,12 @@ The bundled SQLite backend works out of the box; other backends are installed as
 | --- | --- | --- |
 | SQLite | Built in, default | [docs/backends/sqlite.md](docs/backends/sqlite.md) |
 | GitHub Projects | External plugin | [docs/backends/github.md](docs/backends/github.md) |
+| Linear | External plugin | [docs/backends/linear.md](docs/backends/linear.md) |
 
 ```sh
 tasks plugin list
 tasks plugin install github
+tasks plugin install linear
 ```
 
 ## Quick start
@@ -66,6 +68,8 @@ tasks done <id>
 tasks next
 tasks comment <id> "text"        # omit text or use "-" to read stdin
 tasks comments <id>
+tasks login [backend]           # store credentials, never in config
+tasks logout [backend]
 tasks archive <id>
 tasks rm <id> [--hard --yes]
 tasks columns
@@ -131,11 +135,26 @@ Generic environment overrides:
 
 - `TASKS_BACKEND`: backend name.
 - `TASKS_PLUGIN_DIR`: plugin discovery directory.
+- `TASKS_CREDENTIALS_FILE`: credentials file path.
 
 Backend-specific environment variables are documented with each backend.
 
 `tasks config path` and `tasks config show` explain what is active.
 `tasks doctor` checks config, plugin discovery, and backend connectivity.
+
+## Credentials
+
+Tokens are stored separately from configuration so the config can be committed:
+
+```text
+~/.local/share/tasks/credentials.toml
+```
+
+The file is created with `0600` permissions in a `0700` directory. Run
+`tasks login <backend>` to store a token and `tasks logout <backend>` to remove
+it. `TASKS_CREDENTIALS_FILE` overrides the location. Environment variables such
+as `GH_TOKEN` and `LINEAR_API_KEY` still take precedence, which is the intended
+path for CI.
 
 ## Plugins
 
@@ -180,11 +199,11 @@ The protocol is defined in `proto/backend.proto`; generated stubs are committed.
 ## Development
 
 ```sh
-mise run build       # bin/tasks and bin/tasks-plugin-github
+mise run build       # bin/tasks, bin/tasks-plugin-github, bin/tasks-plugin-linear
 mise run test
 mise run lint
 mise run generate    # buf + protoc plugins are managed by mise
-mise run install     # go install the CLI and GitHub plugin
+mise run install     # go install the CLI and bundled plugins
 mise run fmt
 mise run clean
 
@@ -199,6 +218,7 @@ Layout:
 ```text
 main.go                       host CLI + bundled backend server
 cmd/tasks-plugin-github       external GitHub plugin
+cmd/tasks-plugin-linear       external Linear plugin
 internal/cli                  commands, output, init/doctor
 internal/cli/tui              Bubble Tea board
 internal/config               config merge and paths

@@ -5,22 +5,28 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/metruzanca/tasks/pkg/sdk"
 	"github.com/spf13/cobra"
 )
 
 func (a *App) initCmd() *cobra.Command {
 	var (
 		db, owner, repo, statusField, priorityField, write string
+		team, oauthClientID, tokenEnv                      string
 		project                                            int
 	)
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Configure a backend and board",
 		Long: `Write a config file. Use --backend github with --owner, --project, and
---repo for GitHub Projects, or leave the defaults for the local SQLite board.
+--repo for GitHub Projects, --backend linear with --team for Linear, or leave
+the defaults for the local SQLite board.
 
 SQLite boards are stored per repository at .tasks/tasks.db unless sqlite.path
-is set explicitly. Use --db to opt into a shared board.`,
+is set explicitly. Use --db to opt into a shared board.
+
+Credentials are never written to config. Run tasks login <backend> after
+initializing.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := a.load()
 			if err != nil {
@@ -52,10 +58,27 @@ is set explicitly. Use --db to opt into a shared board.`,
 			if priorityField != "" {
 				s.Config.GitHub.PriorityField = priorityField
 			}
+			if team != "" {
+				s.Config.Linear.Team = team
+			}
+			if oauthClientID != "" {
+				s.Config.Linear.OAuthClientID = oauthClientID
+			}
+			if tokenEnv != "" {
+				switch backend {
+				case "github":
+					s.Config.GitHub.TokenEnv = tokenEnv
+				case "linear":
+					s.Config.Linear.TokenEnv = tokenEnv
+				}
+			}
 			if backend == "github" {
 				if s.Config.GitHub.Owner == "" || s.Config.GitHub.Project == 0 || s.Config.GitHub.Repo == "" {
 					return fmt.Errorf("github requires --owner, --project, and --repo")
 				}
+			}
+			if backend == "linear" && s.Config.Linear.Team == "" {
+				return fmt.Errorf("linear requires --team")
 			}
 			path := s.GlobalPath
 			isRepo := write == "repo"
@@ -118,6 +141,9 @@ is set explicitly. Use --db to opt into a shared board.`,
 	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository (owner/name)")
 	cmd.Flags().StringVar(&statusField, "status-field", "", "GitHub status single-select field")
 	cmd.Flags().StringVar(&priorityField, "priority-field", "", "GitHub priority single-select field")
+	cmd.Flags().StringVar(&team, "team", "", "Linear team key or ID")
+	cmd.Flags().StringVar(&oauthClientID, "oauth-client-id", "", "Linear OAuth app client ID")
+	cmd.Flags().StringVar(&tokenEnv, "token-env", "", "environment variable to read the token from")
 	return cmd
 }
 
@@ -143,6 +169,7 @@ func (a *App) configCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "database:  %s\n", s.Config.SQLite.Path)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "plugins: %s\n", s.Config.PluginDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "credentials: %s\n", s.CredentialsPath)
 			return nil
 		},
 	}, &cobra.Command{
@@ -166,6 +193,11 @@ func (a *App) configCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "project:  %d\n", s.Config.GitHub.Project)
 				fmt.Fprintf(cmd.OutOrStdout(), "repo:     %s\n", s.Config.GitHub.Repo)
 			}
+			if s.Config.Backend == "linear" {
+				fmt.Fprintf(cmd.OutOrStdout(), "team:     %s\n", s.Config.Linear.Team)
+				fmt.Fprintf(cmd.OutOrStdout(), "oauth:    %s\n", s.Config.Linear.OAuthClientID)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "credentials: %s\n", s.CredentialsPath)
 			return nil
 		},
 	})
@@ -189,6 +221,14 @@ func (a *App) doctorCmd() *cobra.Command {
 			}
 			fmt.Fprintf(w, "backend: %s\n", s.Config.Backend)
 			fmt.Fprintf(w, "plugins: %s\n", s.Config.PluginDir)
+			fmt.Fprintf(w, "credentials: %s\n", s.CredentialsPath)
+			if creds, err := sdk.LoadCredential(s.Config.Backend); err == nil && len(creds) > 0 {
+				kind := creds["auth_type"]
+				if kind == "" {
+					kind = "stored"
+				}
+				fmt.Fprintf(w, "credential: %s\n", kind)
+			}
 			if s.Config.Backend == "sqlite" {
 				fmt.Fprintf(w, "database: %s\n", s.Config.SQLite.Path)
 			}

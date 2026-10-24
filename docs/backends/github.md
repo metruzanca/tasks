@@ -21,8 +21,17 @@ cp bin/tasks-plugin-github "${XDG_DATA_HOME:-$HOME/.local/share}/tasks/plugins/"
 tasks doctor
 ```
 
-Authenticate with the `project` and `repo` scopes. The plugin uses `GH_TOKEN`,
-`GITHUB_TOKEN`, or the token from `gh auth token`.
+Authenticate with the `project` and `repo` scopes:
+
+```sh
+tasks login github
+```
+
+Login uses the token from `gh auth token` when the prompt is left blank, or
+accepts a pasted personal access token. Tokens are stored in
+`~/.local/share/tasks/credentials.toml`, never in config. The plugin also uses
+`GH_TOKEN`, `GITHUB_TOKEN`, `token_env`, or `gh auth token` when no stored token
+exists.
 
 Configure the board:
 

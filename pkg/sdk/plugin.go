@@ -12,6 +12,17 @@ import (
 // PluginName is the key used in the go-plugin plugin map.
 const PluginName = "backend"
 
+// AuthPluginName is the key for the optional interactive login service.
+const AuthPluginName = "auth"
+
+// CredentialsFileEnv carries the path to the shared credentials file.
+const CredentialsFileEnv = "TASKS_CREDENTIALS_FILE"
+
+// Authenticator is implemented by backends that support `tasks login`.
+type Authenticator interface {
+	Login(ctx context.Context, input string, hasInput bool) (*pb.LoginResponse, error)
+}
+
 // Handshake is shared by the host and every backend plugin.
 var Handshake = plugin.HandshakeConfig{
 	ProtocolVersion:  ProtocolVersion,
@@ -43,15 +54,53 @@ func (p *Plugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.Cli
 	return &grpcClient{client: pb.NewBackendClient(c)}, nil
 }
 
+// AuthPlugin implements plugin.GRPCPlugin for an Authenticator.
+type AuthPlugin struct {
+	plugin.NetRPCUnsupportedPlugin
+	Impl Authenticator
+}
+
+// GRPCServer registers the auth implementation on a fresh gRPC server.
+func (p *AuthPlugin) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
+	pb.RegisterAuthServer(s, &grpcAuthServer{impl: p.Impl})
+	return nil
+}
+
+// GRPCClient returns an Authenticator backed by the plugin's gRPC service.
+func (p *AuthPlugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+	return &authClient{client: pb.NewAuthClient(c)}, nil
+}
+
 // Serve runs a backend plugin. It never returns; the host terminates it.
 func Serve(b Backend) {
+	plugins := map[string]plugin.Plugin{
+		PluginName: &Plugin{Impl: b},
+	}
+	if a, ok := b.(Authenticator); ok {
+		plugins[AuthPluginName] = &AuthPlugin{Impl: a}
+	}
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: Handshake,
-		Plugins: map[string]plugin.Plugin{
-			PluginName: &Plugin{Impl: b},
-		},
-		GRPCServer: plugin.DefaultGRPCServer,
+		Plugins:         plugins,
+		GRPCServer:      plugin.DefaultGRPCServer,
 	})
+}
+
+type grpcAuthServer struct {
+	pb.UnimplementedAuthServer
+	impl Authenticator
+}
+
+func (s *grpcAuthServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
+	return s.impl.Login(ctx, req.GetInput(), req.GetHasInput())
+}
+
+type authClient struct {
+	client pb.AuthClient
+}
+
+func (c *authClient) Login(ctx context.Context, input string, hasInput bool) (*pb.LoginResponse, error) {
+	return c.client.Login(ctx, &pb.LoginRequest{Input: input, HasInput: hasInput})
 }
 
 type grpcServer struct {

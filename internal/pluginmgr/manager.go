@@ -26,8 +26,10 @@ type Manager struct {
 
 // Session owns a running plugin process.
 type Session struct {
-	Backend sdk.Backend
-	client  *plugin.Client
+	Backend     sdk.Backend
+	client      *plugin.Client
+	rpcClient   plugin.ClientProtocol
+	backendName string
 }
 
 // Close terminates the plugin process.
@@ -58,11 +60,15 @@ func (m *Manager) Open(ctx context.Context, name string) (*Session, error) {
 	cmd.Env = append(os.Environ(),
 		sdk.PluginConfigEnv+"="+cfgJSON,
 		sdk.PluginNameEnv+"="+name,
+		sdk.CredentialsFileEnv+"="+m.Settings.CredentialsPath,
 	)
 
 	client := plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig:  sdk.Handshake,
-		Plugins:          map[string]plugin.Plugin{sdk.PluginName: &sdk.Plugin{}},
+		HandshakeConfig: sdk.Handshake,
+		Plugins: map[string]plugin.Plugin{
+			sdk.PluginName:     &sdk.Plugin{},
+			sdk.AuthPluginName: &sdk.AuthPlugin{},
+		},
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Managed:          true,
@@ -84,7 +90,23 @@ func (m *Manager) Open(ctx context.Context, name string) (*Session, error) {
 		client.Kill()
 		return nil, fmt.Errorf("backend %s has an incompatible plugin protocol", name)
 	}
-	return &Session{Backend: backend, client: client}, nil
+	return &Session{Backend: backend, client: client, rpcClient: rpcClient, backendName: name}, nil
+}
+
+// Authenticator returns the optional interactive login service.
+func (s *Session) Authenticator() (sdk.Authenticator, error) {
+	if s == nil || s.rpcClient == nil {
+		return nil, fmt.Errorf("plugin is not running")
+	}
+	raw, err := s.rpcClient.Dispense(sdk.AuthPluginName)
+	if err != nil {
+		return nil, fmt.Errorf("backend %q does not support login", s.backendName)
+	}
+	auth, ok := raw.(sdk.Authenticator)
+	if !ok {
+		return nil, fmt.Errorf("backend %q has an incompatible login protocol", s.backendName)
+	}
+	return auth, nil
 }
 
 func (m *Manager) command(name string) (*exec.Cmd, error) {

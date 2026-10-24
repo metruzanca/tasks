@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,28 +20,33 @@ import (
 
 type client struct {
 	cfg        Config
-	token      string
 	http       *http.Client
 	graphqlURL string
 	restURL    string
+
+	tokenOnce sync.Once
+	token     string
+	tokenErr  error
 
 	once    sync.Once
 	proj    *project
 	projErr error
 }
 
-func newClient(cfg Config, token string) *client {
+func newClient(cfg Config) *client {
 	return &client{
 		cfg:        cfg,
-		token:      token,
 		http:       &http.Client{Timeout: 30 * time.Second},
 		graphqlURL: "https://api.github.com/graphql",
 		restURL:    "https://api.github.com",
 	}
 }
 
-func execCommand(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+func (c *client) authToken(ctx context.Context) (string, error) {
+	c.tokenOnce.Do(func() {
+		c.token, c.tokenErr = resolveToken(ctx, c.cfg.TokenEnv)
+	})
+	return c.token, c.tokenErr
 }
 
 type project struct {
@@ -659,6 +663,14 @@ func (c *client) listComments(ctx context.Context, number int) ([]*pb.Comment, e
 }
 
 func (c *client) graphql(ctx context.Context, query string, vars map[string]any, out any) error {
+	token, err := c.authToken(ctx)
+	if err != nil {
+		return err
+	}
+	return c.graphqlWithToken(ctx, token, query, vars, out)
+}
+
+func (c *client) graphqlWithToken(ctx context.Context, token, query string, vars map[string]any, out any) error {
 	if vars == nil {
 		vars = map[string]any{}
 	}
@@ -670,7 +682,7 @@ func (c *client) graphql(ctx context.Context, query string, vars map[string]any,
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := c.http.Do(req)
@@ -732,7 +744,11 @@ func (c *client) rest(ctx context.Context, method, path string, payload, out any
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	token, err := c.authToken(ctx)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	if payload != nil {

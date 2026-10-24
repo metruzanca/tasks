@@ -1551,6 +1551,134 @@ func (x *HealthResponse) GetMessage() string {
 	return ""
 }
 
+type LoginRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Input         string                 `protobuf:"bytes,1,opt,name=input,proto3" json:"input,omitempty"`
+	HasInput      bool                   `protobuf:"varint,2,opt,name=has_input,json=hasInput,proto3" json:"has_input,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LoginRequest) Reset() {
+	*x = LoginRequest{}
+	mi := &file_backend_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoginRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoginRequest) ProtoMessage() {}
+
+func (x *LoginRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_backend_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoginRequest.ProtoReflect.Descriptor instead.
+func (*LoginRequest) Descriptor() ([]byte, []int) {
+	return file_backend_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *LoginRequest) GetInput() string {
+	if x != nil {
+		return x.Input
+	}
+	return ""
+}
+
+func (x *LoginRequest) GetHasInput() bool {
+	if x != nil {
+		return x.HasInput
+	}
+	return false
+}
+
+type LoginResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Done          bool                   `protobuf:"varint,1,opt,name=done,proto3" json:"done,omitempty"`
+	Prompt        string                 `protobuf:"bytes,2,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	Secret        bool                   `protobuf:"varint,3,opt,name=secret,proto3" json:"secret,omitempty"`
+	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Url           string                 `protobuf:"bytes,5,opt,name=url,proto3" json:"url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LoginResponse) Reset() {
+	*x = LoginResponse{}
+	mi := &file_backend_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoginResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoginResponse) ProtoMessage() {}
+
+func (x *LoginResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_backend_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoginResponse.ProtoReflect.Descriptor instead.
+func (*LoginResponse) Descriptor() ([]byte, []int) {
+	return file_backend_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *LoginResponse) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
+}
+
+func (x *LoginResponse) GetPrompt() string {
+	if x != nil {
+		return x.Prompt
+	}
+	return ""
+}
+
+func (x *LoginResponse) GetSecret() bool {
+	if x != nil {
+		return x.Secret
+	}
+	return false
+}
+
+func (x *LoginResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *LoginResponse) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
 var File_backend_proto protoreflect.FileDescriptor
 
 const file_backend_proto_rawDesc = "" +
@@ -1669,7 +1797,16 @@ const file_backend_proto_rawDesc = "" +
 	"\rHealthRequest\":\n" +
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*\x86\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"A\n" +
+	"\fLoginRequest\x12\x14\n" +
+	"\x05input\x18\x01 \x01(\tR\x05input\x12\x1b\n" +
+	"\thas_input\x18\x02 \x01(\bR\bhasInput\"\x7f\n" +
+	"\rLoginResponse\x12\x12\n" +
+	"\x04done\x18\x01 \x01(\bR\x04done\x12\x16\n" +
+	"\x06prompt\x18\x02 \x01(\tR\x06prompt\x12\x16\n" +
+	"\x06secret\x18\x03 \x01(\bR\x06secret\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12\x10\n" +
+	"\x03url\x18\x05 \x01(\tR\x03url*\x86\x01\n" +
 	"\bPriority\x12\x18\n" +
 	"\x14PRIORITY_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rPRIORITY_NONE\x10\x01\x12\x10\n" +
@@ -1682,7 +1819,9 @@ const file_backend_proto_rawDesc = "" +
 	"\x14COLUMN_CATEGORY_TODO\x10\x01\x12\x1f\n" +
 	"\x1bCOLUMN_CATEGORY_IN_PROGRESS\x10\x02\x12\x18\n" +
 	"\x14COLUMN_CATEGORY_DONE\x10\x03\x12\x19\n" +
-	"\x15COLUMN_CATEGORY_OTHER\x10\x042\xbc\x05\n" +
+	"\x15COLUMN_CATEGORY_OTHER\x10\x042@\n" +
+	"\x04Auth\x128\n" +
+	"\x05Login\x12\x16.tasks.v1.LoginRequest\x1a\x17.tasks.v1.LoginResponse2\xbc\x05\n" +
 	"\aBackend\x12<\n" +
 	"\bDescribe\x12\x19.tasks.v1.DescribeRequest\x1a\x15.tasks.v1.BackendInfo\x128\n" +
 	"\x05Setup\x12\x16.tasks.v1.SetupRequest\x1a\x17.tasks.v1.SetupResponse\x12D\n" +
@@ -1713,7 +1852,7 @@ func file_backend_proto_rawDescGZIP() []byte {
 }
 
 var file_backend_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_backend_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_backend_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_backend_proto_goTypes = []any{
 	(Priority)(0),                 // 0: tasks.v1.Priority
 	(ColumnCategory)(0),           // 1: tasks.v1.ColumnCategory
@@ -1739,46 +1878,50 @@ var file_backend_proto_goTypes = []any{
 	(*ListCommentsResponse)(nil),  // 21: tasks.v1.ListCommentsResponse
 	(*HealthRequest)(nil),         // 22: tasks.v1.HealthRequest
 	(*HealthResponse)(nil),        // 23: tasks.v1.HealthResponse
-	(*timestamppb.Timestamp)(nil), // 24: google.protobuf.Timestamp
+	(*LoginRequest)(nil),          // 24: tasks.v1.LoginRequest
+	(*LoginResponse)(nil),         // 25: tasks.v1.LoginResponse
+	(*timestamppb.Timestamp)(nil), // 26: google.protobuf.Timestamp
 }
 var file_backend_proto_depIdxs = []int32{
 	1,  // 0: tasks.v1.Column.category:type_name -> tasks.v1.ColumnCategory
 	2,  // 1: tasks.v1.BackendInfo.columns:type_name -> tasks.v1.Column
 	3,  // 2: tasks.v1.BackendInfo.capabilities:type_name -> tasks.v1.Capabilities
 	0,  // 3: tasks.v1.Task.priority:type_name -> tasks.v1.Priority
-	24, // 4: tasks.v1.Task.created_at:type_name -> google.protobuf.Timestamp
-	24, // 5: tasks.v1.Task.updated_at:type_name -> google.protobuf.Timestamp
-	24, // 6: tasks.v1.Comment.created_at:type_name -> google.protobuf.Timestamp
+	26, // 4: tasks.v1.Task.created_at:type_name -> google.protobuf.Timestamp
+	26, // 5: tasks.v1.Task.updated_at:type_name -> google.protobuf.Timestamp
+	26, // 6: tasks.v1.Comment.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 7: tasks.v1.TaskFilter.priority:type_name -> tasks.v1.Priority
 	7,  // 8: tasks.v1.ListTasksRequest.filter:type_name -> tasks.v1.TaskFilter
 	5,  // 9: tasks.v1.ListTasksResponse.tasks:type_name -> tasks.v1.Task
 	0,  // 10: tasks.v1.CreateTaskRequest.priority:type_name -> tasks.v1.Priority
 	0,  // 11: tasks.v1.UpdateTaskRequest.priority:type_name -> tasks.v1.Priority
 	6,  // 12: tasks.v1.ListCommentsResponse.comments:type_name -> tasks.v1.Comment
-	8,  // 13: tasks.v1.Backend.Describe:input_type -> tasks.v1.DescribeRequest
-	9,  // 14: tasks.v1.Backend.Setup:input_type -> tasks.v1.SetupRequest
-	11, // 15: tasks.v1.Backend.ListTasks:input_type -> tasks.v1.ListTasksRequest
-	13, // 16: tasks.v1.Backend.GetTask:input_type -> tasks.v1.GetTaskRequest
-	14, // 17: tasks.v1.Backend.CreateTask:input_type -> tasks.v1.CreateTaskRequest
-	15, // 18: tasks.v1.Backend.UpdateTask:input_type -> tasks.v1.UpdateTaskRequest
-	16, // 19: tasks.v1.Backend.MoveTask:input_type -> tasks.v1.MoveTaskRequest
-	17, // 20: tasks.v1.Backend.DeleteTask:input_type -> tasks.v1.DeleteTaskRequest
-	19, // 21: tasks.v1.Backend.AddComment:input_type -> tasks.v1.AddCommentRequest
-	20, // 22: tasks.v1.Backend.ListComments:input_type -> tasks.v1.ListCommentsRequest
-	22, // 23: tasks.v1.Backend.Health:input_type -> tasks.v1.HealthRequest
-	4,  // 24: tasks.v1.Backend.Describe:output_type -> tasks.v1.BackendInfo
-	10, // 25: tasks.v1.Backend.Setup:output_type -> tasks.v1.SetupResponse
-	12, // 26: tasks.v1.Backend.ListTasks:output_type -> tasks.v1.ListTasksResponse
-	5,  // 27: tasks.v1.Backend.GetTask:output_type -> tasks.v1.Task
-	5,  // 28: tasks.v1.Backend.CreateTask:output_type -> tasks.v1.Task
-	5,  // 29: tasks.v1.Backend.UpdateTask:output_type -> tasks.v1.Task
-	5,  // 30: tasks.v1.Backend.MoveTask:output_type -> tasks.v1.Task
-	18, // 31: tasks.v1.Backend.DeleteTask:output_type -> tasks.v1.DeleteTaskResponse
-	6,  // 32: tasks.v1.Backend.AddComment:output_type -> tasks.v1.Comment
-	21, // 33: tasks.v1.Backend.ListComments:output_type -> tasks.v1.ListCommentsResponse
-	23, // 34: tasks.v1.Backend.Health:output_type -> tasks.v1.HealthResponse
-	24, // [24:35] is the sub-list for method output_type
-	13, // [13:24] is the sub-list for method input_type
+	24, // 13: tasks.v1.Auth.Login:input_type -> tasks.v1.LoginRequest
+	8,  // 14: tasks.v1.Backend.Describe:input_type -> tasks.v1.DescribeRequest
+	9,  // 15: tasks.v1.Backend.Setup:input_type -> tasks.v1.SetupRequest
+	11, // 16: tasks.v1.Backend.ListTasks:input_type -> tasks.v1.ListTasksRequest
+	13, // 17: tasks.v1.Backend.GetTask:input_type -> tasks.v1.GetTaskRequest
+	14, // 18: tasks.v1.Backend.CreateTask:input_type -> tasks.v1.CreateTaskRequest
+	15, // 19: tasks.v1.Backend.UpdateTask:input_type -> tasks.v1.UpdateTaskRequest
+	16, // 20: tasks.v1.Backend.MoveTask:input_type -> tasks.v1.MoveTaskRequest
+	17, // 21: tasks.v1.Backend.DeleteTask:input_type -> tasks.v1.DeleteTaskRequest
+	19, // 22: tasks.v1.Backend.AddComment:input_type -> tasks.v1.AddCommentRequest
+	20, // 23: tasks.v1.Backend.ListComments:input_type -> tasks.v1.ListCommentsRequest
+	22, // 24: tasks.v1.Backend.Health:input_type -> tasks.v1.HealthRequest
+	25, // 25: tasks.v1.Auth.Login:output_type -> tasks.v1.LoginResponse
+	4,  // 26: tasks.v1.Backend.Describe:output_type -> tasks.v1.BackendInfo
+	10, // 27: tasks.v1.Backend.Setup:output_type -> tasks.v1.SetupResponse
+	12, // 28: tasks.v1.Backend.ListTasks:output_type -> tasks.v1.ListTasksResponse
+	5,  // 29: tasks.v1.Backend.GetTask:output_type -> tasks.v1.Task
+	5,  // 30: tasks.v1.Backend.CreateTask:output_type -> tasks.v1.Task
+	5,  // 31: tasks.v1.Backend.UpdateTask:output_type -> tasks.v1.Task
+	5,  // 32: tasks.v1.Backend.MoveTask:output_type -> tasks.v1.Task
+	18, // 33: tasks.v1.Backend.DeleteTask:output_type -> tasks.v1.DeleteTaskResponse
+	6,  // 34: tasks.v1.Backend.AddComment:output_type -> tasks.v1.Comment
+	21, // 35: tasks.v1.Backend.ListComments:output_type -> tasks.v1.ListCommentsResponse
+	23, // 36: tasks.v1.Backend.Health:output_type -> tasks.v1.HealthResponse
+	25, // [25:37] is the sub-list for method output_type
+	13, // [13:25] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
 	13, // [13:13] is the sub-list for extension extendee
 	0,  // [0:13] is the sub-list for field type_name
@@ -1797,9 +1940,9 @@ func file_backend_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_backend_proto_rawDesc), len(file_backend_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   22,
+			NumMessages:   24,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_backend_proto_goTypes,
 		DependencyIndexes: file_backend_proto_depIdxs,

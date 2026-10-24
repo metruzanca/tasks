@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/metruzanca/tasks/pkg/sdk"
 )
 
 type SQLite struct {
@@ -27,11 +28,19 @@ type GitHub struct {
 	TokenEnv      string `toml:"token_env" json:"token_env"`
 }
 
+type Linear struct {
+	Team          string `toml:"team" json:"team"`
+	OAuthClientID string `toml:"oauth_client_id" json:"oauth_client_id"`
+	TokenEnv      string `toml:"token_env" json:"token_env"`
+	ReadyStatus   string `toml:"ready_status" json:"ready_status"`
+}
+
 type Config struct {
 	Backend   string `toml:"backend"`
 	PluginDir string `toml:"plugin_dir"`
 	SQLite    SQLite `toml:"sqlite"`
 	GitHub    GitHub `toml:"github"`
+	Linear    Linear `toml:"linear"`
 
 	Raw map[string]any `toml:"-"`
 }
@@ -49,6 +58,8 @@ type Settings struct {
 	GlobalSQLitePathSet bool
 	RepoSqlitePath      string
 	RepoSqlitePathSet   bool
+
+	CredentialsPath string
 }
 
 // GlobalPath returns the user-level configuration path.
@@ -82,11 +93,16 @@ func Load() (*Settings, error) {
 	if err != nil {
 		return nil, err
 	}
+	cp, err := sdk.CredentialsPath()
+	if err != nil {
+		return nil, err
+	}
 	s := &Settings{
-		Config:     Config{Raw: map[string]any{}},
-		GlobalPath: gp,
-		DataDir:    dd,
-		ConfigDir:  filepath.Dir(gp),
+		Config:          Config{Raw: map[string]any{}},
+		GlobalPath:      gp,
+		DataDir:         dd,
+		ConfigDir:       filepath.Dir(gp),
+		CredentialsPath: cp,
 	}
 	var globalRaw map[string]any
 	if _, err := os.Stat(gp); err == nil {
@@ -257,6 +273,8 @@ func (s *Settings) Section(backend string) string {
 		v = s.Config.SQLite
 	case "github":
 		v = s.Config.GitHub
+	case "linear":
+		v = s.Config.Linear
 	default:
 		v = s.Config.Raw[backend]
 		if v == nil {
@@ -284,6 +302,8 @@ func (s *Settings) Write(path string, repo bool) error {
 			doc["sqlite"] = s.Config.SQLite
 		case "github":
 			doc["github"] = s.Config.GitHub
+		case "linear":
+			doc["linear"] = s.Config.Linear
 		default:
 			doc[s.Config.Backend] = s.Config.Raw[s.Config.Backend]
 		}
