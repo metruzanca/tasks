@@ -5,32 +5,32 @@ go = "1.27.0"
 "go:google.golang.org/grpc/cmd/protoc-gen-go-grpc" = "1.6.2"
 
 [tasks.default]
-description = "Build the CLI and bundled plugins"
+description = "Build the tasks CLI"
 depends = ["build"]
 
 [tasks.all]
-description = "Build the CLI and bundled plugins"
+description = "Build the tasks CLI"
 depends = ["build"]
 
 [tasks.build]
-description = "Build the CLI and bundled plugins into ./bin"
-depends = ["tasks", "plugin-github", "plugin-linear"]
+description = "Build the tasks CLI into ./bin"
+depends = ["tasks"]
 
 [tasks.tasks]
 description = "Build the tasks CLI"
 run = 'mkdir -p "${BIN:-bin}" && go build -ldflags "-X main.version=${VERSION:-dev}" -o "${BIN:-bin}/tasks" .'
 
 [tasks.plugin-github]
-description = "Build the external GitHub plugin"
+description = "Build a standalone GitHub plugin binary (optional; GitHub is native)"
 run = 'mkdir -p "${BIN:-bin}" && go build -o "${BIN:-bin}/tasks-plugin-github" ./cmd/tasks-plugin-github'
 
 [tasks.plugin-linear]
-description = "Build the external Linear plugin"
+description = "Build a standalone Linear plugin binary (optional; Linear is native)"
 run = 'mkdir -p "${BIN:-bin}" && go build -o "${BIN:-bin}/tasks-plugin-linear" ./cmd/tasks-plugin-linear'
 
 [tasks.install]
-description = "Install tasks and the bundled plugins with go install"
-run = 'go install -ldflags "-X main.version=${VERSION:-dev}" . ./cmd/tasks-plugin-github ./cmd/tasks-plugin-linear'
+description = "Install the tasks CLI with go install"
+run = 'go install -ldflags "-X main.version=${VERSION:-dev}" .'
 
 [tasks.test]
 description = "Run the test suite"

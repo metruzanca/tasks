@@ -9,21 +9,19 @@ research dumps, or conversation history.
 
 The CLI host is backend-agnostic. Storage and sync live in
 [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) backends over gRPC.
-The bundled SQLite backend works out of the box; other backends are installed as
-`tasks-plugin-<name>` executables.
+SQLite, GitHub Projects, and Linear are native backends compiled into the CLI.
+Other backends are installed as `tasks-plugin-<name>` executables.
 
 ## Backends
 
 | Backend | Delivery | Docs |
 | --- | --- | --- |
-| SQLite | Built in, default | [docs/backends/sqlite.md](docs/backends/sqlite.md) |
-| GitHub Projects | External plugin | [docs/backends/github.md](docs/backends/github.md) |
-| Linear | External plugin | [docs/backends/linear.md](docs/backends/linear.md) |
+| SQLite | Native, default | [docs/backends/sqlite.md](docs/backends/sqlite.md) |
+| GitHub Projects | Native | [docs/backends/github.md](docs/backends/github.md) |
+| Linear | Native | [docs/backends/linear.md](docs/backends/linear.md) |
 
 ```sh
 tasks plugin list
-tasks plugin install github
-tasks plugin install linear
 ```
 
 ## Quick start
@@ -158,15 +156,18 @@ path for CI.
 
 ## Plugins
 
+Native backends (`sqlite`, `github`, `linear`) are compiled into the `tasks`
+binary and need no install. External backends are separate
+`tasks-plugin-<name>` executables.
+
 ```sh
 tasks plugin list
-tasks plugin install <name>            # go install the official plugin module
 tasks plugin install <module>@<version> --name <name>
 tasks plugin remove <name>
 tasks plugin path <name>
 ```
 
-Plugins are discovered as `tasks-plugin-<name>` in this order:
+External plugins are discovered as `tasks-plugin-<name>` in this order:
 
 1. `plugin_dir` from config
 2. `~/.local/share/tasks/plugins`
@@ -175,9 +176,9 @@ Plugins are discovered as `tasks-plugin-<name>` in this order:
 
 `plugin install` runs `go install` with `GOBIN` set to the plugin directory, then
 starts the plugin and calls `Health` to verify it. The module must be published
-for `go install` to work.
+for `go install` to work. Native names cannot be installed or removed.
 
-For local development, build the plugin into the plugin directory:
+For local development of an external plugin, build it into the plugin directory:
 
 ```sh
 go build -o "${XDG_DATA_HOME:-$HOME/.local/share}/tasks/plugins/tasks-plugin-<name>" \
@@ -199,11 +200,11 @@ The protocol is defined in `proto/backend.proto`; generated stubs are committed.
 ## Development
 
 ```sh
-mise run build       # bin/tasks, bin/tasks-plugin-github, bin/tasks-plugin-linear
+mise run build       # bin/tasks
 mise run test
 mise run lint
 mise run generate    # buf + protoc plugins are managed by mise
-mise run install     # go install the CLI and bundled plugins
+mise run install     # go install the CLI
 mise run fmt
 mise run clean
 
@@ -216,10 +217,11 @@ Mise installs the pinned Go toolchain, `buf`, and the protobuf plugins from
 Layout:
 
 ```text
-main.go                       host CLI + bundled backend server
-cmd/tasks-plugin-github       external GitHub plugin
-cmd/tasks-plugin-linear       external Linear plugin
+main.go                       host CLI + native backend server
+cmd/tasks-plugin-github       optional standalone GitHub plugin
+cmd/tasks-plugin-linear       optional standalone Linear plugin
 internal/cli                  commands, output, init/doctor
+internal/native               native backend registry and server
 internal/cli/tui              Bubble Tea board
 internal/config               config merge and paths
 internal/pluginmgr            discovery, go-plugin client, install

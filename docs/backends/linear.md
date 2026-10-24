@@ -1,22 +1,9 @@
 # Linear backend
 
-The Linear backend is an external plugin. Tasks are issues in one team, and the
-team's workflow states are the board columns. Labels, assignees, comments,
-descriptions, priority, archive, and manual ordering are supported.
-
-## Install
-
-```sh
-tasks plugin install linear
-```
-
-For local development:
-
-```sh
-mise run plugin-linear
-cp bin/tasks-plugin-linear "${XDG_DATA_HOME:-$HOME/.local/share}/tasks/plugins/"
-tasks doctor
-```
+The Linear backend is native and compiled into the `tasks` binary. Tasks are
+issues in one team, and the team's workflow states are the board columns.
+Labels, assignees, comments, descriptions, priority, archive, and manual
+ordering are supported.
 
 ## Login
 

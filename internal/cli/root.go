@@ -6,9 +6,8 @@ import (
 	"os"
 
 	"github.com/metruzanca/tasks/internal/config"
+	"github.com/metruzanca/tasks/internal/native"
 	"github.com/metruzanca/tasks/internal/pluginmgr"
-	"github.com/metruzanca/tasks/pkg/sdk"
-	"github.com/metruzanca/tasks/plugins/sqlite"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -119,18 +118,15 @@ func (a *App) versionCmd() *cobra.Command {
 
 func (a *App) serveCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "__plugin", Hidden: true}
-	sqliteCmd := &cobra.Command{
-		Use:   "sqlite",
-		Short: "serve the built-in sqlite backend",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			b, err := sqlite.NewFromEnv()
-			if err != nil {
-				return err
-			}
-			sdk.Serve(b)
-			return nil
-		},
+	for _, name := range native.Names() {
+		name := name
+		cmd.AddCommand(&cobra.Command{
+			Use:   name,
+			Short: "serve the native " + name + " backend",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return native.Serve(name)
+			},
+		})
 	}
-	cmd.AddCommand(sqliteCmd)
 	return cmd
 }

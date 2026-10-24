@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/metruzanca/tasks/internal/native"
 	"github.com/metruzanca/tasks/internal/pluginmgr"
 	"github.com/metruzanca/tasks/internal/skill"
 	"github.com/spf13/cobra"
@@ -25,20 +26,21 @@ func (a *App) pluginListCmd() *cobra.Command {
 			if _, err := a.load(); err != nil {
 				return err
 			}
-			plugins, err := a.manager.List()
+			external, err := a.manager.List()
 			if err != nil {
 				return err
 			}
+			plugins := append(a.manager.Native(), external...)
 			if a.jsonOut {
-				out := []map[string]string{{"name": "sqlite", "path": "built-in"}}
-				for _, p := range plugins {
-					out = append(out, map[string]string{"name": p.Name, "path": p.Path})
-				}
-				return printJSON(cmd.OutOrStdout(), out)
+				return printJSON(cmd.OutOrStdout(), plugins)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %s\n", "sqlite", "built-in")
+			fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-9s %s\n", "NAME", "DELIVERY", "PATH")
 			for _, p := range plugins {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %s\n", p.Name, p.Path)
+				delivery := "external"
+				if p.Native {
+					delivery = "native"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-9s %s\n", p.Name, delivery, p.Path)
 			}
 			return nil
 		},
@@ -69,6 +71,9 @@ func (a *App) pluginInstallCmd() *cobra.Command {
 			if name == "" {
 				parts := strings.Split(module, "/")
 				name = strings.TrimPrefix(parts[len(parts)-1], "tasks-plugin-")
+			}
+			if native.IsNative(name) {
+				return fmt.Errorf("%s is a native backend and is already available", name)
 			}
 			path, err := a.manager.Install(cmd.Context(), module, name, version)
 			if err != nil {
@@ -111,12 +116,12 @@ func (a *App) pluginPathCmd() *cobra.Command {
 			if _, err := a.load(); err != nil {
 				return err
 			}
-			if args[0] == "sqlite" {
+			if native.IsNative(args[0]) {
 				self, err := os.Executable()
 				if err != nil {
 					return err
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), self+" (built-in __plugin sqlite)")
+				fmt.Fprintf(cmd.OutOrStdout(), "%s (native __plugin %s)\n", self, args[0])
 				return nil
 			}
 			p, err := a.manager.Find(args[0])

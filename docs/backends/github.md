@@ -1,25 +1,10 @@
 # GitHub Projects backend
 
-The GitHub backend is an external plugin. Tasks are issues in one repository,
-added to a Projects v2 board. Labels, assignees, comments, descriptions, and
-priority are supported.
+The GitHub backend is native and compiled into the `tasks` binary. Tasks are
+issues in one repository, added to a Projects v2 board. Labels, assignees,
+comments, descriptions, and priority are supported.
 
 ## Setup
-
-Install the plugin:
-
-```sh
-tasks plugin install github
-```
-
-For local development, build it next to the `tasks` binary or into the plugin
-directory:
-
-```sh
-mise run plugin-github
-cp bin/tasks-plugin-github "${XDG_DATA_HOME:-$HOME/.local/share}/tasks/plugins/"
-tasks doctor
-```
 
 Authenticate with the `project` and `repo` scopes:
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"github.com/metruzanca/tasks/internal/config"
+	"github.com/metruzanca/tasks/internal/native"
 	"github.com/metruzanca/tasks/pkg/sdk"
 )
 
@@ -110,12 +111,12 @@ func (s *Session) Authenticator() (sdk.Authenticator, error) {
 }
 
 func (m *Manager) command(name string) (*exec.Cmd, error) {
-	if name == "sqlite" {
+	if native.IsNative(name) {
 		exe, err := os.Executable()
 		if err != nil {
 			return nil, err
 		}
-		return exec.Command(exe, "__plugin", "sqlite"), nil
+		return exec.Command(exe, "__plugin", name), nil
 	}
 	path, err := m.Find(name)
 	if err != nil {
@@ -155,10 +156,20 @@ func (m *Manager) Find(name string) (string, error) {
 	return "", fmt.Errorf("backend %q is not installed: run `tasks plugin install %s`", name, name)
 }
 
-// Plugin describes an installed plugin.
+// Plugin describes a native or installed backend plugin.
 type Plugin struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Native bool   `json:"native"`
+}
+
+// Native returns the backends compiled into the tasks binary.
+func (m *Manager) Native() []Plugin {
+	out := make([]Plugin, 0, len(native.Names()))
+	for _, n := range native.Names() {
+		out = append(out, Plugin{Name: n, Path: "built-in", Native: true})
+	}
+	return out
 }
 
 // List returns installed external plugins.
@@ -183,7 +194,7 @@ func (m *Manager) List() ([]Plugin, error) {
 			}
 			n = strings.TrimPrefix(n, "tasks-plugin-")
 			n = strings.TrimSuffix(n, ".exe")
-			if validName.MatchString(n) {
+			if validName.MatchString(n) && !native.IsNative(n) {
 				seen[n] = filepath.Join(dir, e.Name())
 			}
 		}
@@ -205,6 +216,9 @@ func (m *Manager) Install(ctx context.Context, module, name, version string) (st
 	}
 	if !validName.MatchString(name) {
 		return "", fmt.Errorf("invalid plugin name %q (use --name)", name)
+	}
+	if native.IsNative(name) {
+		return "", fmt.Errorf("%s is a native backend and is already available", name)
 	}
 	if module == "" {
 		return "", fmt.Errorf("plugin module path is required")
@@ -238,8 +252,8 @@ func (m *Manager) Install(ctx context.Context, module, name, version string) (st
 
 // Remove deletes an installed external plugin.
 func (m *Manager) Remove(name string) error {
-	if name == "sqlite" {
-		return fmt.Errorf("sqlite is built in and cannot be removed")
+	if native.IsNative(name) {
+		return fmt.Errorf("%s is a native backend and cannot be removed", name)
 	}
 	path, err := m.Find(name)
 	if err != nil {

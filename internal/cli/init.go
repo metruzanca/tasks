@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/metruzanca/tasks/internal/native"
 	"github.com/metruzanca/tasks/pkg/sdk"
 	"github.com/spf13/cobra"
 )
@@ -232,6 +234,7 @@ func (a *App) doctorCmd() *cobra.Command {
 			if s.Config.Backend == "sqlite" {
 				fmt.Fprintf(w, "database: %s\n", s.Config.SQLite.Path)
 			}
+			fmt.Fprintf(w, "native:  %s\n", strings.Join(native.Names(), ", "))
 			external, _ := a.manager.List()
 			for _, p := range external {
 				fmt.Fprintf(w, "  found %s at %s\n", p.Name, p.Path)
