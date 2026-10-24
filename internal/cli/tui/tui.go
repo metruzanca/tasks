@@ -5,12 +5,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/metruzanca/tasks/internal/render"
 	"github.com/metruzanca/tasks/pkg/sdk"
 	"github.com/metruzanca/tasks/pkg/sdk/pb"
 )
@@ -22,15 +22,85 @@ const (
 	modeFilter
 	modeNew
 	modeEdit
-	modeDetail
-	modeConfirmArchive
 )
 
 type loadedMsg struct {
 	tasks   []*pb.Task
 	info    *pb.BackendInfo
 	message string
+	focusID string
 	err     error
+}
+
+type hitRect struct {
+	x, y, w, h int
+}
+
+func (r hitRect) contains(x, y int) bool {
+	return x >= r.x && x < r.x+r.w && y >= r.y && y < r.y+r.h
+}
+
+type cardHit struct {
+	taskID  string
+	taskKey string
+	col     int
+	row     int
+	rect    hitRect
+}
+
+type columnHit struct {
+	col  int
+	rect hitRect
+}
+
+type dragState struct {
+	taskID     string
+	taskKey    string
+	fromStatus string
+	x, y       int
+	hoverCol   int
+	moved      bool
+}
+
+type editField int
+
+const (
+	editTitle editField = iota
+	editDescription
+	editLabels
+	editStatus
+	editPriority
+	editAssignee
+	editSave
+	editDelete
+	editClose
+	editFieldCount
+)
+
+type editForm struct {
+	taskID        string
+	taskKey       string
+	initialStatus string
+	url           string
+	createdAt     string
+	updatedAt     string
+	focus         editField
+	title         textinput.Model
+	description   textarea.Model
+	labels        textinput.Model
+	status        textinput.Model
+	priority      textinput.Model
+	assignee      textinput.Model
+	fieldHits     map[editField]hitRect
+	saveRect      hitRect
+	deleteRect    hitRect
+	closeRect     hitRect
+	err           string
+
+	confirmDelete     bool
+	confirmFocus      int
+	confirmDeleteRect hitRect
+	confirmCancelRect hitRect
 }
 
 // Model is the board state.
@@ -48,16 +118,22 @@ type Model struct {
 	width    int
 	height   int
 
-	input    textinput.Model
-	textarea textarea.Model
+	cardHits   []cardHit
+	columnHits []columnHit
+	drag       *dragState
+	edit       *editForm
+
+	lastClickID string
+	lastClickAt time.Time
+
+	input textinput.Model
 }
 
 // Run starts the board.
 func Run(ctx context.Context, backend sdk.Backend) error {
 	m := &Model{ctx: ctx, backend: backend, width: 120, height: 40}
-	m.textarea = textarea.New()
 	m.input = textinput.New()
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
@@ -67,6 +143,10 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) load(message string) tea.Cmd {
+	return m.loadFocus(message, "")
+}
+
+func (m *Model) loadFocus(message, focusID string) tea.Cmd {
 	return func() tea.Msg {
 		info, err := m.backend.Describe(m.ctx)
 		if err != nil {
@@ -76,16 +156,20 @@ func (m *Model) load(message string) tea.Cmd {
 		if err != nil {
 			return loadedMsg{err: err}
 		}
-		return loadedMsg{tasks: tasks, info: info, message: message}
+		return loadedMsg{tasks: tasks, info: info, message: message, focusID: focusID}
 	}
 }
 
 func (m *Model) action(fn func() error, message string) tea.Cmd {
+	return m.actionFocus(fn, message, "")
+}
+
+func (m *Model) actionFocus(fn func() error, message, focusID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := fn(); err != nil {
 			return loadedMsg{err: err}
 		}
-		return m.load(message)()
+		return m.loadFocus(message, focusID)()
 	}
 }
 
@@ -93,8 +177,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.textarea.SetWidth(max(40, msg.Width-12))
-		m.textarea.SetHeight(max(6, msg.Height/3))
 		return m, nil
 	case loadedMsg:
 		if msg.err != nil {
@@ -109,8 +191,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tasks = msg.tasks
 		}
 		m.message = msg.message
+		if msg.focusID != "" {
+			m.focusTask(msg.focusID)
+		}
 		m.clamp()
 		return m, nil
+	case tea.MouseMsg:
+		if m.mode == modeEdit {
+			return m.updateEditMouse(tea.MouseEvent(msg))
+		}
+		if m.mode != modeNormal {
+			return m, nil
+		}
+		return m.updateMouse(tea.MouseEvent(msg))
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -122,28 +215,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateNew(msg)
 		case modeEdit:
 			return m.updateEdit(msg)
-		case modeDetail:
-			if msg.String() == "esc" || msg.String() == "enter" || msg.String() == "q" {
-				m.mode = modeNormal
-			}
-			return m, nil
-		case modeConfirmArchive:
-			switch msg.String() {
-			case "y":
-				t := m.selected()
-				if t == nil {
-					m.mode = modeNormal
-					return m, nil
-				}
-				m.mode = modeNormal
-				return m, m.action(func() error {
-					return m.backend.DeleteTask(m.ctx, t.Id, false)
-				}, "Archived "+t.Key)
-			case "n", "esc":
-				m.mode = modeNormal
-				return m, nil
-			}
-			return m, nil
 		}
 		return m.updateNormal(msg)
 	}
@@ -152,37 +223,40 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "esc":
+		m.drag = nil
+		return m, nil
 	case "q":
 		return m, tea.Quit
 	case "r":
 		return m, m.load("Refreshed")
-	case "left", "h":
+	case "left":
 		if m.col > 0 {
 			m.col--
 			m.row = 0
 			m.clamp()
 		}
-	case "right", "l":
+	case "right":
 		if m.info != nil && m.col < len(m.info.Columns)-1 {
 			m.col++
 			m.row = 0
 			m.clamp()
 		}
-	case "up", "k":
+	case "up":
 		if m.row > 0 {
 			m.row--
 		}
-	case "down", "j":
+	case "down":
 		if m.row < len(m.columnTasks())-1 {
 			m.row++
 		}
-	case "H":
+	case "shift+left", "ctrl+left":
 		return m, m.moveColumn(-1)
-	case "L":
+	case "shift+right", "ctrl+right":
 		return m, m.moveColumn(1)
-	case "K":
+	case "shift+up", "ctrl+up":
 		return m, m.reorder(-1)
-	case "J":
+	case "shift+down", "ctrl+down":
 		return m, m.reorder(1)
 	case "n":
 		m.input = textinput.New()
@@ -190,51 +264,143 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		m.mode = modeNew
 		return m, textinput.Blink
-	case "e":
-		t := m.selected()
-		if t == nil {
-			return m, nil
-		}
-		m.textarea = textarea.New()
-		m.textarea.SetValue(t.Description)
-		m.textarea.SetWidth(max(40, m.width-12))
-		m.textarea.SetHeight(max(6, m.height/3))
-		m.textarea.Focus()
-		m.mode = modeEdit
-		return m, textarea.Blink
 	case "enter":
-		if m.selected() != nil {
-			m.mode = modeDetail
+		if t := m.selected(); t != nil {
+			return m, m.openEdit(t.Id)
 		}
-	case "/":
+	case "/", "f":
 		m.input = textinput.New()
 		m.input.Placeholder = "Filter"
 		m.input.SetValue(m.filter)
 		m.input.Focus()
 		m.mode = modeFilter
 		return m, textinput.Blink
-	case "d":
-		t := m.selected()
-		if t == nil || m.info == nil {
+	}
+	return m, nil
+}
+
+func (m *Model) updateMouse(msg tea.MouseEvent) (tea.Model, tea.Cmd) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if msg.Action == tea.MouseActionPress && m.row > 0 {
+			m.row--
+		}
+		return m, nil
+	case tea.MouseButtonWheelDown:
+		if msg.Action == tea.MouseActionPress && m.row < len(m.columnTasks())-1 {
+			m.row++
+		}
+		return m, nil
+	}
+
+	switch msg.Action {
+	case tea.MouseActionPress:
+		if msg.Button != tea.MouseButtonLeft {
 			return m, nil
 		}
-		status := "done"
-		for _, c := range m.info.Columns {
-			if c.Category == pb.ColumnCategory_COLUMN_CATEGORY_DONE {
-				status = c.Name
-				break
+		if h, ok := m.cardAt(msg.X, msg.Y); ok {
+			m.col = h.col
+			m.row = h.row
+			m.clamp()
+			status := ""
+			if m.info != nil && h.col < len(m.info.Columns) {
+				status = m.info.Columns[h.col].Name
+			}
+			m.drag = &dragState{
+				taskID: h.taskID, taskKey: h.taskKey, fromStatus: status,
+				x: msg.X, y: msg.Y, hoverCol: h.col,
+			}
+		} else if c, ok := m.columnAt(msg.X, msg.Y); ok {
+			m.col = c.col
+			m.clamp()
+		}
+	case tea.MouseActionMotion:
+		if m.drag != nil {
+			if msg.X != m.drag.x || msg.Y != m.drag.y {
+				m.drag.moved = true
+			}
+			m.drag.x, m.drag.y = msg.X, msg.Y
+			if c, ok := m.columnAt(msg.X, msg.Y); ok {
+				m.drag.hoverCol = c.col
 			}
 		}
-		return m, m.action(func() error {
-			_, err := m.backend.MoveTask(m.ctx, &pb.MoveTaskRequest{Id: t.Id, Status: status})
-			return err
-		}, "Moved "+t.Key+" to "+status)
-	case "a":
-		if m.selected() != nil {
-			m.mode = modeConfirmArchive
+	case tea.MouseActionRelease:
+		if m.drag != nil {
+			return m.finishDrag(msg.X, msg.Y)
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) finishDrag(x, y int) (tea.Model, tea.Cmd) {
+	d := m.drag
+	m.drag = nil
+	if d == nil {
+		return m, nil
+	}
+	if !d.moved {
+		if m.registerClick(d.taskID) {
+			return m, m.openEdit(d.taskID)
+		}
+		return m, nil
+	}
+	m.lastClickID = ""
+	if m.info == nil {
+		return m, nil
+	}
+	target, ok := m.columnAt(x, y)
+	if !ok {
+		return m, nil
+	}
+	status := m.info.Columns[target.col].Name
+	req := &pb.MoveTaskRequest{Id: d.taskID, Status: status}
+	if m.info.Capabilities.GetOrdering() {
+		if h, ok := m.cardAt(x, y); ok && h.taskID != d.taskID {
+			if y < h.rect.y+h.rect.h/2 {
+				req.BeforeId = &h.taskID
+			} else {
+				req.AfterId = &h.taskID
+			}
+		}
+	}
+	if strings.EqualFold(status, d.fromStatus) && req.BeforeId == nil && req.AfterId == nil {
+		return m, nil
+	}
+	m.col = target.col
+	m.row = 0
+	message := "Moved " + d.taskKey + " to " + status
+	if strings.EqualFold(status, d.fromStatus) {
+		message = "Reordered " + d.taskKey
+	}
+	return m, m.actionFocus(func() error {
+		_, err := m.backend.MoveTask(m.ctx, req)
+		return err
+	}, message, d.taskID)
+}
+
+func (m *Model) cardAt(x, y int) (cardHit, bool) {
+	for _, h := range m.cardHits {
+		if h.rect.contains(x, y) {
+			return h, true
+		}
+	}
+	return cardHit{}, false
+}
+
+func (m *Model) columnAt(x, y int) (columnHit, bool) {
+	for _, h := range m.columnHits {
+		if h.rect.contains(x, y) {
+			return h, true
+		}
+	}
+	return columnHit{}, false
+}
+
+func (m *Model) dragStatus() string {
+	if m.drag == nil || m.info == nil || m.drag.hoverCol < 0 || m.drag.hoverCol >= len(m.info.Columns) {
+		return ""
+	}
+	return m.info.Columns[m.drag.hoverCol].Name
 }
 
 func (m *Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -280,26 +446,335 @@ func (m *Model) updateNew(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
+	e := m.edit
+	if e == nil {
 		m.mode = modeNormal
 		return m, nil
 	}
-	if msg.String() == "ctrl+s" || msg.String() == "ctrl+enter" {
-		t := m.selected()
-		if t == nil {
-			m.mode = modeNormal
-			return m, nil
-		}
-		desc := m.textarea.Value()
-		m.mode = modeNormal
-		return m, m.action(func() error {
-			_, err := m.backend.UpdateTask(m.ctx, &pb.UpdateTaskRequest{Id: t.Id, Description: &desc})
-			return err
-		}, "Updated "+t.Key)
+	if e.confirmDelete {
+		return m.updateDeleteConfirm(msg)
 	}
+	switch msg.String() {
+	case "esc":
+		return m.closeEdit()
+	case "tab":
+		return m, m.cycleEditFocus(1)
+	case "shift+tab":
+		return m, m.cycleEditFocus(-1)
+	case "ctrl+s", "ctrl+enter":
+		return m.saveEdit()
+	case "enter":
+		switch e.focus {
+		case editSave:
+			return m.saveEdit()
+		case editDelete:
+			return m, m.requestDelete()
+		case editClose:
+			return m.closeEdit()
+		case editDescription:
+			// Let the textarea insert a newline.
+		default:
+			return m, m.cycleEditFocus(1)
+		}
+	case " ":
+		switch e.focus {
+		case editSave:
+			return m.saveEdit()
+		case editDelete:
+			return m, m.requestDelete()
+		case editClose:
+			return m.closeEdit()
+		}
+	}
+
 	var cmd tea.Cmd
-	m.textarea, cmd = m.textarea.Update(msg)
+	switch e.focus {
+	case editTitle:
+		e.title, cmd = e.title.Update(msg)
+	case editDescription:
+		e.description, cmd = e.description.Update(msg)
+	case editLabels:
+		e.labels, cmd = e.labels.Update(msg)
+	case editStatus:
+		e.status, cmd = e.status.Update(msg)
+	case editPriority:
+		e.priority, cmd = e.priority.Update(msg)
+	case editAssignee:
+		e.assignee, cmd = e.assignee.Update(msg)
+	}
 	return m, cmd
+}
+
+func (m *Model) updateDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	e := m.edit
+	if e == nil {
+		m.mode = modeNormal
+		return m, nil
+	}
+	switch msg.String() {
+	case "esc", "n":
+		e.confirmDelete = false
+		return m, m.setEditFocus(editDelete)
+	case "tab", "shift+tab", "left", "right":
+		if e.confirmFocus == 0 {
+			e.confirmFocus = 1
+		} else {
+			e.confirmFocus = 0
+		}
+		return m, nil
+	case "enter", " ":
+		if e.confirmFocus == 1 {
+			e.confirmDelete = false
+			return m, m.setEditFocus(editDelete)
+		}
+		return m.deleteTask()
+	case "y":
+		return m.deleteTask()
+	}
+	return m, nil
+}
+
+func (m *Model) requestDelete() tea.Cmd {
+	e := m.edit
+	if e == nil {
+		return nil
+	}
+	e.confirmDelete = true
+	e.confirmFocus = 1
+	return m.setEditFocus(editDelete)
+}
+
+func (m *Model) deleteTask() (tea.Model, tea.Cmd) {
+	e := m.edit
+	if e == nil {
+		m.mode = modeNormal
+		return m, nil
+	}
+	id, key := e.taskID, e.taskKey
+	m.mode = modeNormal
+	m.edit = nil
+	return m, m.action(func() error {
+		return m.backend.DeleteTask(m.ctx, id, true)
+	}, "Deleted "+key)
+}
+
+func (m *Model) updateEditMouse(msg tea.MouseEvent) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+	e := m.edit
+	if e == nil {
+		return m, nil
+	}
+	if e.confirmDelete {
+		if e.confirmCancelRect.contains(msg.X, msg.Y) {
+			e.confirmDelete = false
+			return m, m.setEditFocus(editDelete)
+		}
+		if e.confirmDeleteRect.contains(msg.X, msg.Y) {
+			return m.deleteTask()
+		}
+		return m, nil
+	}
+	if e.saveRect.contains(msg.X, msg.Y) {
+		return m.saveEdit()
+	}
+	if e.deleteRect.contains(msg.X, msg.Y) {
+		return m, m.requestDelete()
+	}
+	if e.closeRect.contains(msg.X, msg.Y) {
+		return m.closeEdit()
+	}
+	for f, r := range e.fieldHits {
+		if r.contains(msg.X, msg.Y) {
+			return m, m.setEditFocus(f)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) openEdit(taskID string) tea.Cmd {
+	t := m.taskByID(taskID)
+	if t == nil {
+		return nil
+	}
+	e := &editForm{
+		taskID: t.Id, taskKey: t.Key, initialStatus: t.Status, url: t.Url,
+		fieldHits: map[editField]hitRect{},
+	}
+	if ts := t.GetCreatedAt(); ts != nil {
+		e.createdAt = ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	if ts := t.GetUpdatedAt(); ts != nil {
+		e.updatedAt = ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	newInput := func(value, placeholder string) textinput.Model {
+		in := textinput.New()
+		in.Prompt = ""
+		in.Placeholder = placeholder
+		in.SetValue(value)
+		return in
+	}
+	e.title = newInput(t.Title, "Task title")
+	e.labels = newInput(strings.Join(t.Labels, ", "), "bug, backend")
+	e.status = newInput(t.Status, "todo, in_progress, done")
+	e.priority = newInput(sdk.PriorityLabel(t.Priority), "none, low, medium, high, urgent")
+	e.assignee = newInput(t.Assignee, "username or @me")
+	e.description = textarea.New()
+	e.description.Prompt = ""
+	e.description.Placeholder = "Description"
+	e.description.SetValue(t.Description)
+	e.description.ShowLineNumbers = false
+	e.description.SetHeight(3)
+	m.edit = e
+	m.mode = modeEdit
+	m.lastClickID = ""
+	return m.setEditFocus(editTitle)
+}
+
+func (m *Model) taskByID(id string) *pb.Task {
+	for _, t := range m.tasks {
+		if t.Id == id {
+			return t
+		}
+	}
+	return nil
+}
+
+func (m *Model) setEditFocus(f editField) tea.Cmd {
+	e := m.edit
+	if e == nil {
+		return nil
+	}
+	e.title.Blur()
+	e.description.Blur()
+	e.labels.Blur()
+	e.status.Blur()
+	e.priority.Blur()
+	e.assignee.Blur()
+	e.focus = f
+	switch f {
+	case editTitle:
+		return e.title.Focus()
+	case editDescription:
+		return e.description.Focus()
+	case editLabels:
+		return e.labels.Focus()
+	case editStatus:
+		return e.status.Focus()
+	case editPriority:
+		return e.priority.Focus()
+	case editAssignee:
+		return e.assignee.Focus()
+	}
+	return nil
+}
+
+func (m *Model) cycleEditFocus(delta int) tea.Cmd {
+	if m.edit == nil {
+		return nil
+	}
+	n := int(editFieldCount)
+	next := (int(m.edit.focus) + delta%n + n) % n
+	return m.setEditFocus(editField(next))
+}
+
+func (m *Model) closeEdit() (tea.Model, tea.Cmd) {
+	m.mode = modeNormal
+	m.edit = nil
+	return m, nil
+}
+
+func (m *Model) saveEdit() (tea.Model, tea.Cmd) {
+	e := m.edit
+	if e == nil {
+		m.mode = modeNormal
+		return m, nil
+	}
+	title := strings.TrimSpace(e.title.Value())
+	if title == "" {
+		e.err = "title is required"
+		return m, nil
+	}
+	priority, ok := sdk.ParsePriority(strings.TrimSpace(e.priority.Value()))
+	if !ok {
+		e.err = "priority must be none, low, medium, high, or urgent"
+		return m, nil
+	}
+	status, statusNames, ok := m.resolveFormStatus(e.status.Value())
+	if !ok {
+		e.err = "status must be one of: " + strings.Join(statusNames, ", ")
+		return m, nil
+	}
+	desc := e.description.Value()
+	assignee := strings.TrimSpace(e.assignee.Value())
+	req := &pb.UpdateTaskRequest{
+		Id: e.taskID, Title: &title, Description: &desc,
+		Priority: &priority, SetLabels: true, Labels: parseLabels(e.labels.Value()),
+	}
+	if assignee == "" {
+		req.ClearAssignee = true
+	} else {
+		req.Assignee = &assignee
+	}
+	statusChanged := !strings.EqualFold(status, e.initialStatus)
+	key := e.taskKey
+	id := e.taskID
+	m.mode = modeNormal
+	m.edit = nil
+	return m, m.actionFocus(func() error {
+		if _, err := m.backend.UpdateTask(m.ctx, req); err != nil {
+			return err
+		}
+		if statusChanged {
+			if _, err := m.backend.MoveTask(m.ctx, &pb.MoveTaskRequest{Id: id, Status: status}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, "Updated "+key, id)
+}
+
+func (m *Model) resolveFormStatus(value string) (string, []string, bool) {
+	value = strings.TrimSpace(value)
+	if m.info == nil {
+		return "", nil, value == ""
+	}
+	names := make([]string, 0, len(m.info.Columns))
+	for _, c := range m.info.Columns {
+		names = append(names, c.Name)
+		if strings.EqualFold(c.Name, value) ||
+			strings.EqualFold(normalizeStatus(c.Name), normalizeStatus(value)) {
+			return c.Name, names, true
+		}
+	}
+	return "", names, false
+}
+
+func normalizeStatus(s string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "_", " ")
+}
+
+func (m *Model) registerClick(taskID string) bool {
+	now := time.Now()
+	if m.lastClickID == taskID && now.Sub(m.lastClickAt) <= 450*time.Millisecond {
+		m.lastClickID = ""
+		m.lastClickAt = time.Time{}
+		return true
+	}
+	m.lastClickID = taskID
+	m.lastClickAt = now
+	return false
+}
+
+func parseLabels(s string) []string {
+	var labels []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			labels = append(labels, part)
+		}
+	}
+	return labels
 }
 
 func (m *Model) moveColumn(delta int) tea.Cmd {
@@ -315,10 +790,10 @@ func (m *Model) moveColumn(delta int) tea.Cmd {
 	if strings.EqualFold(status, t.Status) {
 		return nil
 	}
-	return m.action(func() error {
+	return m.actionFocus(func() error {
 		_, err := m.backend.MoveTask(m.ctx, &pb.MoveTaskRequest{Id: t.Id, Status: status})
 		return err
-	}, "Moved "+t.Key+" to "+status)
+	}, "Moved "+t.Key+" to "+status, t.Id)
 }
 
 func (m *Model) reorder(delta int) tea.Cmd {
@@ -337,10 +812,10 @@ func (m *Model) reorder(delta int) tea.Cmd {
 	} else {
 		req.AfterId = &neighbor.Id
 	}
-	return m.action(func() error {
+	return m.actionFocus(func() error {
 		_, err := m.backend.MoveTask(m.ctx, req)
 		return err
-	}, "Reordered "+t.Key)
+	}, "Reordered "+t.Key, t.Id)
 }
 
 func (m *Model) selected() *pb.Task {
@@ -382,6 +857,34 @@ func matches(t *pb.Task, f string) bool {
 	return false
 }
 
+func (m *Model) focusTask(id string) {
+	if m.info == nil {
+		return
+	}
+	var target *pb.Task
+	for _, t := range m.tasks {
+		if t.Id == id && !t.Archived {
+			target = t
+			break
+		}
+	}
+	if target == nil {
+		return
+	}
+	for i, c := range m.info.Columns {
+		if strings.EqualFold(c.Name, target.Status) {
+			m.col = i
+			break
+		}
+	}
+	for i, t := range m.columnTasks() {
+		if t.Id == id {
+			m.row = i
+			return
+		}
+	}
+}
+
 func (m *Model) clamp() {
 	if m.info == nil {
 		return
@@ -415,12 +918,15 @@ func (m *Model) View() string {
 		top += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("error: "+m.err.Error())
 	}
 
-	cols := m.renderColumns()
-	footer := "j/k move  h/l column  H/L change status  J/K reorder  n new  e edit  enter detail  d done  a archive  / filter  r refresh  q quit"
-	if m.info != nil && !m.info.Capabilities.GetOrdering() {
-		footer = strings.ReplaceAll(footer, "J/K reorder  ", "")
+	if m.drag != nil && m.drag.moved {
+		target := m.dragStatus()
+		if target != "" {
+			top += "  moving " + m.drag.taskKey + " to " + target
+		}
 	}
-	help := lipgloss.NewStyle().Faint(true).Render(footer)
+	columnsY := lipgloss.Height(top) + 1
+	cols := m.renderColumns(columnsY)
+	help := lipgloss.NewStyle().Faint(true).Width(max(1, m.width)).Render(m.helpText())
 
 	body := lipgloss.JoinVertical(lipgloss.Left, top, "", cols)
 	switch m.mode {
@@ -429,37 +935,241 @@ func (m *Model) View() string {
 	case modeNew:
 		return m.overlay("New task in "+m.info.Columns[m.col].Name, m.input.View()+"\n\nenter create  esc cancel")
 	case modeEdit:
-		return m.overlay("Edit description", m.textarea.View()+"\n\nctrl+s save  esc cancel")
-	case modeDetail:
-		if t := m.selected(); t != nil {
-			return m.overlay(t.Key+" "+t.Title, detail(t))
+		if m.edit != nil && m.edit.confirmDelete {
+			return m.renderDeleteConfirm()
 		}
-	case modeConfirmArchive:
-		if t := m.selected(); t != nil {
-			return m.overlay("Archive "+t.Key+"?", "y archive  n cancel")
-		}
+		return m.renderEdit()
 	}
-	return body + "\n\n" + help
+	return m.withFooter(body, help)
 }
 
-func detail(t *pb.Task) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "status:   %s\n", t.Status)
-	fmt.Fprintf(&b, "priority: %s\n", sdk.PriorityLabel(t.Priority))
-	if t.Assignee != "" {
-		fmt.Fprintf(&b, "assignee: %s\n", t.Assignee)
+func (m *Model) withFooter(body, footer string) string {
+	gap := m.height - lipgloss.Height(body) - lipgloss.Height(footer) + 1
+	if gap < 1 {
+		gap = 1
 	}
-	if len(t.Labels) > 0 {
-		fmt.Fprintf(&b, "labels:   %s\n", strings.Join(t.Labels, ", "))
+	return body + strings.Repeat("\n", gap) + footer
+}
+
+func (m *Model) renderEdit() string {
+	e := m.edit
+	if e == nil {
+		return ""
 	}
-	if t.Url != "" {
-		fmt.Fprintf(&b, "url:      %s\n", t.Url)
+	contentWidth := m.width - 12
+	if contentWidth > 76 {
+		contentWidth = 76
 	}
-	if t.Description != "" {
-		fmt.Fprintf(&b, "\n%s", t.Description)
+	if contentWidth < 40 {
+		contentWidth = max(20, m.width-4)
 	}
-	b.WriteString("\n\nesc close")
-	return b.String()
+	fieldWidth := max(10, contentWidth-2)
+	labelWidth := min(12, max(6, fieldWidth-12))
+	inputWidth := max(1, fieldWidth-2-labelWidth-1)
+	if e.title.Width != inputWidth {
+		e.title.Width = inputWidth
+	}
+	if e.labels.Width != inputWidth {
+		e.labels.Width = inputWidth
+	}
+	if e.status.Width != inputWidth {
+		e.status.Width = inputWidth
+	}
+	if e.priority.Width != inputWidth {
+		e.priority.Width = inputWidth
+	}
+	if e.assignee.Width != inputWidth {
+		e.assignee.Width = inputWidth
+	}
+	if e.description.Width() != inputWidth {
+		e.description.SetWidth(inputWidth)
+	}
+	if e.description.Height() != 3 {
+		e.description.SetHeight(3)
+	}
+
+	var lines []string
+	row := 0
+	add := func(s string) int {
+		line := row
+		lines = append(lines, s)
+		row += lipgloss.Height(s)
+		return line
+	}
+	fieldLines := map[editField]int{}
+	fieldHeights := map[editField]int{}
+	addField := func(f editField, labelText, view string) {
+		labelStyle := lipgloss.NewStyle().Faint(true)
+		borderColor := "8"
+		if e.focus == f {
+			labelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+			borderColor = "6"
+		}
+		label := labelStyle.Width(labelWidth).Render(truncate(labelText, labelWidth))
+		content := lipgloss.JoinHorizontal(lipgloss.Top, label, " ", view)
+		block := lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(lipgloss.Color(borderColor)).
+			PaddingLeft(1).
+			Render(content)
+		fieldLines[f] = add(block)
+		fieldHeights[f] = lipgloss.Height(block)
+		add("")
+	}
+
+	add(lipgloss.NewStyle().Bold(true).Render(truncate("Task "+e.taskKey, fieldWidth)))
+	if e.url != "" {
+		add(lipgloss.NewStyle().Faint(true).Render(truncate("URL: "+e.url, fieldWidth)))
+	}
+	if e.createdAt != "" || e.updatedAt != "" {
+		add(lipgloss.NewStyle().Faint(true).Render(truncate(
+			"Created: "+e.createdAt+"  Updated: "+e.updatedAt, fieldWidth)))
+	}
+	add("")
+	addField(editTitle, "Title", e.title.View())
+	addField(editDescription, "Description", e.description.View())
+	addField(editLabels, "Labels", e.labels.View())
+	addField(editStatus, "Status", e.status.View())
+	addField(editPriority, "Priority", e.priority.View())
+	addField(editAssignee, "Assignee", e.assignee.View())
+	if e.err != "" {
+		add(lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(truncate(e.err, fieldWidth)))
+		add("")
+	}
+	buttonStyle := func(focused bool, color string) lipgloss.Style {
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(color)).
+			Padding(0, 2)
+		if focused {
+			style = style.
+				Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"}).
+				Bold(true)
+		}
+		return style
+	}
+	save := buttonStyle(e.focus == editSave, "2").Render("Save")
+	deleteButton := buttonStyle(e.focus == editDelete, "1").Render("Delete")
+	closeButton := buttonStyle(e.focus == editClose, "6").Render("Close")
+	buttons := lipgloss.JoinHorizontal(lipgloss.Top, save, "  ", deleteButton, "  ", closeButton)
+	buttonLine := add(buttons)
+	add(lipgloss.NewStyle().Faint(true).Render(truncate(
+		"tab next  shift+tab previous  ctrl+s save  esc close", fieldWidth)))
+
+	content := strings.Join(lines, "\n")
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("6")).
+		Padding(1, 1).
+		Width(contentWidth).
+		Render(content)
+	outerW := lipgloss.Width(modal)
+	outerH := lipgloss.Height(modal)
+	areaH := max(1, m.height-4)
+	left, top := 0, 0
+	if m.width > outerW {
+		left = (m.width - outerW) / 2
+	}
+	if areaH > outerH {
+		top = (areaH - outerH) / 2
+	}
+	contentX := left + 2
+	contentY := top + 2
+	e.fieldHits = make(map[editField]hitRect, len(fieldLines))
+	for f, line := range fieldLines {
+		e.fieldHits[f] = hitRect{
+			x: contentX, y: contentY + line,
+			w: fieldWidth, h: fieldHeights[f],
+		}
+	}
+	e.saveRect = hitRect{
+		x: contentX, y: contentY + buttonLine,
+		w: lipgloss.Width(save), h: lipgloss.Height(save),
+	}
+	deleteX := contentX + lipgloss.Width(save) + 2
+	e.deleteRect = hitRect{
+		x: deleteX, y: contentY + buttonLine,
+		w: lipgloss.Width(deleteButton), h: lipgloss.Height(deleteButton),
+	}
+	e.closeRect = hitRect{
+		x: deleteX + lipgloss.Width(deleteButton) + 2, y: contentY + buttonLine,
+		w: lipgloss.Width(closeButton), h: lipgloss.Height(closeButton),
+	}
+	return lipgloss.Place(m.width, areaH, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m *Model) renderDeleteConfirm() string {
+	e := m.edit
+	if e == nil {
+		return ""
+	}
+	contentWidth := min(max(44, m.width/3), 64)
+	if contentWidth > m.width-4 {
+		contentWidth = max(20, m.width-4)
+	}
+	fieldWidth := max(10, contentWidth-2)
+
+	var lines []string
+	row := 0
+	add := func(s string) int {
+		line := row
+		lines = append(lines, s)
+		row += lipgloss.Height(s)
+		return line
+	}
+	add(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")).Render(
+		truncate("Delete "+e.taskKey+"?", fieldWidth)))
+	add(lipgloss.NewStyle().Faint(true).Width(fieldWidth).Render(
+		"This permanently deletes the task. This cannot be undone."))
+	add("")
+
+	buttonStyle := func(focused bool, color string) lipgloss.Style {
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(color)).
+			Padding(0, 2)
+		if focused {
+			style = style.
+				Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"}).
+				Bold(true)
+		}
+		return style
+	}
+	deleteButton := buttonStyle(e.confirmFocus == 0, "1").Render("Delete")
+	cancelButton := buttonStyle(e.confirmFocus == 1, "6").Render("Cancel")
+	buttons := lipgloss.JoinHorizontal(lipgloss.Top, deleteButton, "  ", cancelButton)
+	buttonLine := add(buttons)
+	add(lipgloss.NewStyle().Faint(true).Render(truncate(
+		"tab switch  enter confirm  esc cancel", fieldWidth)))
+
+	content := strings.Join(lines, "\n")
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("1")).
+		Padding(1, 1).
+		Width(contentWidth).
+		Render(content)
+	outerW := lipgloss.Width(modal)
+	outerH := lipgloss.Height(modal)
+	areaH := max(1, m.height-4)
+	left, top := 0, 0
+	if m.width > outerW {
+		left = (m.width - outerW) / 2
+	}
+	if areaH > outerH {
+		top = (areaH - outerH) / 2
+	}
+	contentX := left + 2
+	contentY := top + 2
+	e.confirmDeleteRect = hitRect{
+		x: contentX, y: contentY + buttonLine,
+		w: lipgloss.Width(deleteButton), h: lipgloss.Height(deleteButton),
+	}
+	e.confirmCancelRect = hitRect{
+		x: contentX + lipgloss.Width(deleteButton) + 2, y: contentY + buttonLine,
+		w: lipgloss.Width(cancelButton), h: lipgloss.Height(cancelButton),
+	}
+	return lipgloss.Place(m.width, areaH, lipgloss.Center, lipgloss.Center, modal)
 }
 
 func (m *Model) overlay(title, body string) string {
@@ -472,23 +1182,40 @@ func (m *Model) overlay(title, body string) string {
 	return lipgloss.Place(m.width, m.height-4, lipgloss.Center, lipgloss.Center, style.Render(content))
 }
 
-func (m *Model) renderColumns() string {
+func (m *Model) renderColumns(y int) string {
 	n := len(m.info.Columns)
 	if n == 0 {
 		return ""
 	}
+	m.cardHits = m.cardHits[:0]
+	m.columnHits = m.columnHits[:0]
 	width := (m.width - (n - 1)) / n
 	if width < 16 {
 		width = 16
 	}
 	views := make([]string, 0, n)
+	x := 0
+	maxH := 0
 	for i, c := range m.info.Columns {
-		views = append(views, m.renderColumn(i, c, width))
+		view := m.renderColumn(i, c, width, x, y)
+		views = append(views, view)
+		if h := lipgloss.Height(view); h > maxH {
+			maxH = h
+		}
+		x += lipgloss.Width(view)
+	}
+	// Make the whole lane below the header a drop target, including empty
+	// space below the last card.
+	laneH := max(maxH, m.height-y-2)
+	for i := range m.columnHits {
+		if m.columnHits[i].rect.h < laneH {
+			m.columnHits[i].rect.h = laneH
+		}
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, views...)
 }
 
-func (m *Model) renderColumn(idx int, c *pb.Column, width int) string {
+func (m *Model) renderColumn(idx int, c *pb.Column, width, x, y int) string {
 	tasks := m.tasksFor(c.Name)
 	active := idx == m.col
 	border := lipgloss.RoundedBorder()
@@ -496,21 +1223,106 @@ func (m *Model) renderColumn(idx int, c *pb.Column, width int) string {
 	if active {
 		color = "6"
 	}
-	header := lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("%s (%d)", c.Name, len(tasks)))
-	var cards []string
-	for i, t := range tasks {
-		cards = append(cards, m.renderCard(t, i == m.row && active, width-2))
+	if m.drag != nil && m.drag.moved && idx == m.drag.hoverCol {
+		border = lipgloss.ThickBorder()
+		color = "2"
 	}
-	if len(cards) == 0 {
-		cards = append(cards, lipgloss.NewStyle().Faint(true).Render("empty"))
-	}
-	box := lipgloss.NewStyle().
+	header := lipgloss.NewStyle().
 		Border(border).
 		BorderForeground(lipgloss.Color(color)).
 		Width(width-2).
 		Padding(0, 1).
-		Render(header + "\n\n" + strings.Join(cards, "\n\n"))
-	return box + " "
+		Bold(true).
+		Render(truncate(fmt.Sprintf("%s (%d)", c.Name, len(tasks)), width-4))
+
+	var cards []string
+	cardY := y + 3
+	for i, t := range tasks {
+		card := m.renderCard(t, i == m.row && active, width)
+		h := lipgloss.Height(card)
+		m.cardHits = append(m.cardHits, cardHit{
+			taskID: t.Id, taskKey: t.Key, col: idx, row: i,
+			rect: hitRect{x: x, y: cardY, w: width, h: h},
+		})
+		cards = append(cards, card)
+		cardY += h + 1
+	}
+	var body string
+	if len(cards) == 0 {
+		body = lipgloss.NewStyle().Faint(true).Width(width).Padding(0, 1).Render("empty")
+	} else {
+		body = strings.Join(cards, "\n\n")
+	}
+	view := header + "\n" + body
+	m.columnHits = append(m.columnHits, columnHit{
+		col: idx, rect: hitRect{x: x, y: y, w: width, h: lipgloss.Height(view)},
+	})
+	return view + " "
+}
+
+func (m *Model) renderCard(t *pb.Task, selected bool, width int) string {
+	inner := max(1, width-4)
+	title := strings.Join(strings.Fields(t.Title), " ")
+	title = truncate(title, max(1, inner-len([]rune(t.Key))-1))
+	metaText := sdk.PriorityLabel(t.Priority)
+	if len(t.Labels) > 0 {
+		metaText += " " + strings.Join(t.Labels, ",")
+	}
+	if t.Assignee != "" {
+		metaText += " @" + t.Assignee
+	}
+	metaText = truncate(metaText, inner)
+	description := strings.Join(strings.Fields(t.Description), " ")
+	description = truncate(description, inner)
+
+	prColor := "8"
+	switch t.Priority {
+	case pb.Priority_PRIORITY_URGENT:
+		prColor = "1"
+	case pb.Priority_PRIORITY_HIGH:
+		prColor = "3"
+	case pb.Priority_PRIORITY_MEDIUM:
+		prColor = "6"
+	case pb.Priority_PRIORITY_LOW:
+		prColor = "2"
+	}
+	line := lipgloss.NewStyle().Faint(true).Render(t.Key) + " " +
+		lipgloss.NewStyle().Bold(true).Render(title) + "\n" +
+		lipgloss.NewStyle().Foreground(lipgloss.Color(prColor)).Render(metaText)
+	if description != "" {
+		line += "\n" + lipgloss.NewStyle().Faint(true).Render(description)
+	}
+
+	borderColor := "8"
+	if selected {
+		borderColor = "6"
+	}
+	if m.drag != nil && m.drag.taskID == t.Id {
+		borderColor = "3"
+	}
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(borderColor)).
+		Width(width-2).
+		Padding(0, 1)
+	if m.drag != nil && m.drag.taskID == t.Id {
+		style = style.Background(lipgloss.AdaptiveColor{Light: "229", Dark: "58"})
+	} else if selected {
+		style = style.Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
+	}
+	return style.Render(line)
+}
+
+func (m *Model) helpText() string {
+	nav := []string{"←/→ column", "↑/↓ card", "shift+←/→ move"}
+	if m.info != nil && m.info.Capabilities.GetOrdering() {
+		nav = append(nav, "shift+↑/↓ reorder")
+	}
+	actions := []string{
+		"enter open", "n new", "f filter", "r refresh", "q quit",
+		"drag cards with mouse",
+	}
+	return strings.Join(nav, "  ") + "\n" + strings.Join(actions, "  ")
 }
 
 func (m *Model) tasksFor(status string) []*pb.Task {
@@ -527,37 +1339,18 @@ func (m *Model) tasksFor(status string) []*pb.Task {
 	return out
 }
 
-func (m *Model) renderCard(t *pb.Task, selected bool, width int) string {
-	pr := render.ConvertTask(t).Priority
-	title := t.Title
-	if len([]rune(title)) > width-2 {
-		title = string([]rune(title)[:width-5]) + "..."
+func truncate(s string, n int) string {
+	if n <= 0 {
+		return ""
 	}
-	key := lipgloss.NewStyle().Faint(true).Render(t.Key)
-	prColor := "8"
-	switch t.Priority {
-	case pb.Priority_PRIORITY_URGENT:
-		prColor = "1"
-	case pb.Priority_PRIORITY_HIGH:
-		prColor = "3"
-	case pb.Priority_PRIORITY_MEDIUM:
-		prColor = "6"
-	case pb.Priority_PRIORITY_LOW:
-		prColor = "2"
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-	meta := lipgloss.NewStyle().Foreground(lipgloss.Color(prColor)).Render(pr)
-	if len(t.Labels) > 0 {
-		meta += " " + lipgloss.NewStyle().Faint(true).Render(strings.Join(t.Labels, ","))
+	if n <= 3 {
+		return string(r[:n])
 	}
-	if t.Assignee != "" {
-		meta += " @" + t.Assignee
-	}
-	style := lipgloss.NewStyle()
-	if selected {
-		style = style.Bold(true).Border(lipgloss.NormalBorder(), false, false, false, true).
-			BorderForeground(lipgloss.Color("6")).PaddingLeft(1)
-	}
-	return style.Render(key + " " + title + "\n" + meta)
+	return string(r[:n-3]) + "..."
 }
 
 func max(a, b int) int {

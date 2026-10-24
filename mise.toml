@@ -18,7 +18,7 @@ depends = ["tasks", "plugin-github"]
 
 [tasks.tasks]
 description = "Build the tasks CLI"
-run = 'mkdir -p "${BIN:-bin}" && go build -ldflags "-X main.version=${VERSION:-dev}" -o "${BIN:-bin}/tasks" ./cmd/tasks'
+run = 'mkdir -p "${BIN:-bin}" && go build -ldflags "-X main.version=${VERSION:-dev}" -o "${BIN:-bin}/tasks" .'
 
 [tasks.plugin-github]
 description = "Build the external GitHub plugin"
@@ -26,7 +26,7 @@ run = 'mkdir -p "${BIN:-bin}" && go build -o "${BIN:-bin}/tasks-plugin-github" .
 
 [tasks.install]
 description = "Install tasks and the GitHub plugin with go install"
-run = 'go install -ldflags "-X main.version=${VERSION:-dev}" ./cmd/tasks ./cmd/tasks-plugin-github'
+run = 'go install -ldflags "-X main.version=${VERSION:-dev}" . ./cmd/tasks-plugin-github'
 
 [tasks.test]
 description = "Run the test suite"

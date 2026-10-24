@@ -72,8 +72,9 @@ priority_field = "Priority"
 
 ## Limitations
 
-- Manual ordering within a column is not supported, so `J`/`K` are disabled in
-  the TUI and `move --before`/`--after` returns an error.
+- Manual ordering within a column is not supported, so `shift+↑`/`shift+↓`
+  reordering is disabled in the TUI and `move --before`/`--after` returns an
+  error.
 - Draft issues and pull requests already on the board are ignored.
 - GitHub does not allow issue deletion, so removing a task archives and closes
   it instead.

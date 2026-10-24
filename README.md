@@ -101,9 +101,19 @@ JSON output is stable and compact enough to pipe:
 
 ## Board keys
 
-`j`/`k` move, `h`/`l` switch columns, `H`/`L` move a task between columns,
-`J`/`K` reorder (when the backend supports it), `n` new, `e` edit description,
-`enter` detail, `d` done, `a` archive, `/` filter, `r` refresh, `q` quit.
+Arrow keys navigate: `←`/`→` switch columns and `↑`/`↓` select cards.
+`shift+←`/`shift+→` move the selected card between columns, and
+`shift+↑`/`shift+↓` reorder it when the backend supports ordering.
+
+With a mouse, click a card to select it, double-click to open it, drag it onto
+another column to move it, and use the wheel to scroll through a column.
+
+`enter` opens the task screen, `n` new, `f` or `/` filter, `r` refresh, and
+`q` quit. The task screen shows details alongside editable title, description,
+labels, status, priority, and assignee fields. Use `tab`/`shift+tab` between
+fields and the Save/Delete/Close buttons, or click them with the mouse. Esc or
+Close leaves without saving. Delete asks for confirmation before removing the
+task.
 
 ## Configuration
 
@@ -177,6 +187,8 @@ mise run generate    # buf + protoc plugins are managed by mise
 mise run install     # go install the CLI and GitHub plugin
 mise run fmt
 mise run clean
+
+go install .         # installs the tasks binary from the root package
 ```
 
 Mise installs the pinned Go toolchain, `buf`, and the protobuf plugins from
@@ -185,7 +197,7 @@ Mise installs the pinned Go toolchain, `buf`, and the protobuf plugins from
 Layout:
 
 ```text
-cmd/tasks                     host CLI + bundled backend server
+main.go                       host CLI + bundled backend server
 cmd/tasks-plugin-github       external GitHub plugin
 internal/cli                  commands, output, init/doctor
 internal/cli/tui              Bubble Tea board
