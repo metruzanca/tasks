@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -132,5 +133,21 @@ func TestUpdateCommentsAndFilters(t *testing.T) {
 	none, err := b.ListTasks(ctx, &pb.TaskFilter{Labels: []string{"missing"}})
 	if err != nil || len(none) != 0 {
 		t.Fatalf("label filter: %v %v", none, err)
+	}
+}
+
+func TestRepoBoardCreatesGitignore(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".tasks")
+	b, err := New(Config{Path: filepath.Join(dir, "tasks.db"), Me: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "*\n" {
+		t.Fatalf(".gitignore = %q", data)
 	}
 }

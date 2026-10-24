@@ -1,0 +1,49 @@
+[tools]
+go = "1.27.0"
+"go:github.com/bufbuild/buf/cmd/buf" = "1.74.0"
+"go:google.golang.org/protobuf/cmd/protoc-gen-go" = "1.36.12"
+"go:google.golang.org/grpc/cmd/protoc-gen-go-grpc" = "1.6.2"
+
+[tasks.default]
+description = "Build the CLI and GitHub plugin"
+depends = ["build"]
+
+[tasks.all]
+description = "Build the CLI and GitHub plugin"
+depends = ["build"]
+
+[tasks.build]
+description = "Build the CLI and GitHub plugin into ./bin"
+depends = ["tasks", "plugin-github"]
+
+[tasks.tasks]
+description = "Build the tasks CLI"
+run = 'mkdir -p "${BIN:-bin}" && go build -ldflags "-X main.version=${VERSION:-dev}" -o "${BIN:-bin}/tasks" ./cmd/tasks'
+
+[tasks.plugin-github]
+description = "Build the external GitHub plugin"
+run = 'mkdir -p "${BIN:-bin}" && go build -o "${BIN:-bin}/tasks-plugin-github" ./cmd/tasks-plugin-github'
+
+[tasks.install]
+description = "Install tasks and the GitHub plugin with go install"
+run = 'go install -ldflags "-X main.version=${VERSION:-dev}" ./cmd/tasks ./cmd/tasks-plugin-github'
+
+[tasks.test]
+description = "Run the test suite"
+run = "go test ./..."
+
+[tasks.lint]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.fmt]
+description = "Format Go sources"
+run = "gofmt -w ./cmd ./internal ./pkg ./plugins"
+
+[tasks.generate]
+description = "Regenerate protobuf and gRPC stubs"
+run = "buf generate"
+
+[tasks.clean]
+description = "Remove build output"
+run = 'rm -rf "${BIN:-bin}"'

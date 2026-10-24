@@ -13,7 +13,7 @@ import (
 )
 
 type SQLite struct {
-	Path        string `toml:"path" json:"path"`
+	Path        string `toml:"path,omitempty" json:"path"`
 	Me          string `toml:"me" json:"me"`
 	ReadyStatus string `toml:"ready_status" json:"ready_status"`
 }
@@ -41,8 +41,14 @@ type Settings struct {
 	Config     Config
 	GlobalPath string
 	RepoPath   string
+	RepoRoot   string
 	DataDir    string
 	ConfigDir  string
+
+	GlobalSQLitePath    string
+	GlobalSQLitePathSet bool
+	RepoSqlitePath      string
+	RepoSqlitePathSet   bool
 }
 
 // GlobalPath returns the user-level configuration path.
@@ -82,23 +88,38 @@ func Load() (*Settings, error) {
 		DataDir:    dd,
 		ConfigDir:  filepath.Dir(gp),
 	}
+	var globalRaw map[string]any
 	if _, err := os.Stat(gp); err == nil {
-		if err := decodeInto(gp, &s.Config); err != nil {
+		globalRaw, err = decodeInto(gp, &s.Config)
+		if err != nil {
 			return nil, err
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	s.GlobalSQLitePath, s.GlobalSQLitePathSet = rawString(globalRaw, "sqlite", "path")
 
 	repo, err := FindRepoConfig()
 	if err != nil {
 		return nil, err
 	}
 	s.RepoPath = repo
+	var repoRaw map[string]any
 	if repo != "" {
-		if err := decodeInto(repo, &s.Config); err != nil {
+		repoRaw, err = decodeInto(repo, &s.Config)
+		if err != nil {
 			return nil, err
 		}
+	}
+	s.RepoSqlitePath, s.RepoSqlitePathSet = rawString(repoRaw, "sqlite", "path")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	s.RepoRoot = findRepoRoot(cwd)
+	if s.RepoRoot == "" && repo != "" {
+		s.RepoRoot = filepath.Dir(repo)
 	}
 
 	if v := os.Getenv("TASKS_BACKEND"); v != "" {
@@ -107,8 +128,9 @@ func Load() (*Settings, error) {
 	if v := os.Getenv("TASKS_PLUGIN_DIR"); v != "" {
 		s.Config.PluginDir = v
 	}
-	if v := os.Getenv("TASKS_SQLITE_PATH"); v != "" {
-		s.Config.SQLite.Path = v
+	sqlitePathFromEnv := os.Getenv("TASKS_SQLITE_PATH") != ""
+	if sqlitePathFromEnv {
+		s.Config.SQLite.Path = os.Getenv("TASKS_SQLITE_PATH")
 	}
 	if v := os.Getenv("TASKS_READY_STATUS"); v != "" {
 		s.Config.SQLite.ReadyStatus = v
@@ -120,6 +142,21 @@ func Load() (*Settings, error) {
 	if s.Config.PluginDir == "" {
 		s.Config.PluginDir = filepath.Join(dd, "plugins")
 	}
+
+	// Each repository gets its own board by default. An explicit path in the
+	// repo config opts into a shared board; the global path only applies outside
+	// a repository.
+	switch {
+	case sqlitePathFromEnv:
+	case s.RepoSqlitePathSet:
+		s.Config.SQLite.Path = ExpandHome(s.RepoSqlitePath)
+	case s.RepoRoot != "":
+		s.Config.SQLite.Path = filepath.Join(s.RepoRoot, ".tasks", "tasks.db")
+	case s.GlobalSQLitePathSet:
+		s.Config.SQLite.Path = ExpandHome(s.GlobalSQLitePath)
+	default:
+		s.Config.SQLite.Path = filepath.Join(dd, "tasks.db")
+	}
 	if s.Config.SQLite.Path == "" {
 		s.Config.SQLite.Path = filepath.Join(dd, "tasks.db")
 	}
@@ -129,6 +166,36 @@ func Load() (*Settings, error) {
 		s.Config.SQLite.Me = os.Getenv("USER")
 	}
 	return s, nil
+}
+
+// findRepoRoot returns the nearest directory containing a .git entry.
+func findRepoRoot(start string) string {
+	dir := start
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func rawString(raw map[string]any, section, key string) (string, bool) {
+	if raw == nil {
+		return "", false
+	}
+	sec, ok := raw[section].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	v, ok := sec[key].(string)
+	if !ok || v == "" {
+		return "", false
+	}
+	return v, true
 }
 
 // FindRepoConfig walks up from the working directory looking for .tasks.toml.
@@ -150,23 +217,23 @@ func FindRepoConfig() (string, error) {
 	}
 }
 
-func decodeInto(path string, c *Config) error {
+func decodeInto(path string, c *Config) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := toml.Decode(string(data), c); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var raw map[string]any
 	if err := toml.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if c.Raw == nil {
 		c.Raw = map[string]any{}
 	}
 	mergeRaw(c.Raw, raw)
-	return nil
+	return raw, nil
 }
 
 func mergeRaw(dst, src map[string]any) {

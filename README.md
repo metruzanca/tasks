@@ -7,29 +7,41 @@ project todo list instead of a `todo.md` file.
 `tasks` is not agent memory. It stores actionable project work, not notes,
 research dumps, or conversation history.
 
-- Default backend: local SQLite (no server, no account).
-- Optional backend: GitHub Projects v2, where tasks are issues in a repo.
-- Backends are [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)
-  plugins over gRPC. SQLite ships inside the `tasks` binary; other backends are
-  installed as `tasks-plugin-<name>` executables.
+The CLI host is backend-agnostic. Storage and sync live in
+[hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) backends over gRPC.
+The bundled SQLite backend works out of the box; other backends are installed as
+`tasks-plugin-<name>` executables.
+
+## Backends
+
+| Backend | Delivery | Docs |
+| --- | --- | --- |
+| SQLite | Built in, default | [docs/backends/sqlite.md](docs/backends/sqlite.md) |
+| GitHub Projects | External plugin | [docs/backends/github.md](docs/backends/github.md) |
+
+```sh
+tasks plugin list
+tasks plugin install github
+```
 
 ## Quick start
 
 ```sh
-make build
+mise run build
 export PATH="$PWD/bin:$PATH"
 
 tasks init
 tasks add "Fix expired session redirect" -d "Repro: ..." -p high -l bug
 tasks list
-tasks move T-1 in_progress
-tasks comment T-1 "Cause: cookie path mismatch"
-tasks done T-1
+tasks move <id> in_progress
+tasks comment <id> "Cause: cookie path mismatch"
+tasks done <id>
 tasks board
 ```
 
-The SQLite database lives at `~/.local/share/tasks/tasks.db` by default. Config
-lives at `~/.config/tasks/config.toml`.
+Configuration lives at `~/.config/tasks/config.toml`. A `.tasks.toml` in a
+repository overrides it. See the backend docs for storage, setup, and
+backend-specific settings.
 
 ## Agent skill
 
@@ -64,15 +76,15 @@ tasks init|doctor|config|skill|version
 
 Global flags: `--backend <name>`, `--json`, `--no-color`, `--verbose`.
 
-IDs are `T-12` for SQLite and issue numbers (`42`, `#42`) for GitHub. Commands
-accept either form.
+IDs are provided by the backend. Use the value printed by `add` or returned in
+JSON; commands also accept the backend's display key.
 
 JSON output is stable and compact enough to pipe:
 
 ```json
 {
-  "id": "T-1",
-  "key": "T-1",
+  "id": "task-1",
+  "key": "task-1",
   "title": "Fix expired session redirect",
   "description": "Repro: ...",
   "status": "todo",
@@ -93,58 +105,24 @@ JSON output is stable and compact enough to pipe:
 `J`/`K` reorder (when the backend supports it), `n` new, `e` edit description,
 `enter` detail, `d` done, `a` archive, `/` filter, `r` refresh, `q` quit.
 
-## GitHub Projects
-
-Tasks are issues in one repository, added to a Projects v2 board. Labels,
-assignees, comments, descriptions, and priority are supported.
-
-1. Authenticate with the `project` and `repo` scopes. The CLI uses `GH_TOKEN`,
-   `GITHUB_TOKEN`, or `gh auth token`.
-2. Configure the board:
-
-```sh
-tasks init --backend github \
-  --owner metruzanca \
-  --project 4 \
-  --repo metruzanca/tasks
-```
-
-`init` validates access to the project and creates a `Priority` single-select
-field with `None`, `Low`, `Medium`, `High`, `Urgent` options if it is missing.
-Set `--status-field` or `--priority-field` if your board uses different names.
-The `Status` field must already exist and be single-select.
-
-Limitations:
-
-- Manual ordering within a column is not supported (`J`/`K` are disabled).
-- Draft issues and pull requests on the board are ignored.
-- Closing/archiving a task closes the issue; GitHub does not allow issue deletion.
-
 ## Configuration
 
-Global config:
+Global configuration is read from `~/.config/tasks/config.toml`. The nearest
+`.tasks.toml` in a repository overrides it. Precedence is environment, repo
+config, global config, defaults.
 
 ```toml
-backend = "sqlite"
-
-[sqlite]
-path = "~/.local/share/tasks/tasks.db"
-me = "metruzanca"
-ready_status = "todo"
-
-[github]
-owner = "metruzanca"
-project = 4
-repo = "metruzanca/tasks"
-status_field = "Status"
-priority_field = "Priority"
-# token_env = "MY_GITHUB_TOKEN"
+backend = "<name>"
+plugin_dir = "~/.local/share/tasks/plugins"
+# Backend-specific sections are documented in docs/backends/.
 ```
 
-A `.tasks.toml` in a repository overrides the global config for commands run
-under that directory. Precedence is environment, repo config, global config,
-defaults. Environment overrides: `TASKS_BACKEND`, `TASKS_PLUGIN_DIR`,
-`TASKS_SQLITE_PATH`, `TASKS_READY_STATUS`.
+Generic environment overrides:
+
+- `TASKS_BACKEND`: backend name.
+- `TASKS_PLUGIN_DIR`: plugin discovery directory.
+
+Backend-specific environment variables are documented with each backend.
 
 `tasks config path` and `tasks config show` explain what is active.
 `tasks doctor` checks config, plugin discovery, and backend connectivity.
@@ -153,7 +131,7 @@ defaults. Environment overrides: `TASKS_BACKEND`, `TASKS_PLUGIN_DIR`,
 
 ```sh
 tasks plugin list
-tasks plugin install github            # go install .../cmd/tasks-plugin-github@latest
+tasks plugin install <name>            # go install the official plugin module
 tasks plugin install <module>@<version> --name <name>
 tasks plugin remove <name>
 tasks plugin path <name>
@@ -168,11 +146,13 @@ Plugins are discovered as `tasks-plugin-<name>` in this order:
 
 `plugin install` runs `go install` with `GOBIN` set to the plugin directory, then
 starts the plugin and calls `Health` to verify it. The module must be published
-for `go install` to work. For local development:
+for `go install` to work.
+
+For local development, build the plugin into the plugin directory:
 
 ```sh
-go build -o "${XDG_DATA_HOME:-$HOME/.local/share}/tasks/plugins/tasks-plugin-github" \
-  ./cmd/tasks-plugin-github
+go build -o "${XDG_DATA_HOME:-$HOME/.local/share}/tasks/plugins/tasks-plugin-<name>" \
+  ./cmd/tasks-plugin-<name>
 tasks doctor
 ```
 
@@ -190,27 +170,30 @@ The protocol is defined in `proto/backend.proto`; generated stubs are committed.
 ## Development
 
 ```sh
-make build       # bin/tasks and bin/tasks-plugin-github
-make test
-make lint
-make generate    # requires Go; installs buf and protoc plugins into .tools/
+mise run build       # bin/tasks and bin/tasks-plugin-github
+mise run test
+mise run lint
+mise run generate    # buf + protoc plugins are managed by mise
+mise run install     # go install the CLI and GitHub plugin
+mise run fmt
+mise run clean
 ```
+
+Mise installs the pinned Go toolchain, `buf`, and the protobuf plugins from
+`mise.toml` on first use.
 
 Layout:
 
 ```text
-cmd/tasks                     host CLI + hidden "__plugin sqlite" server
+cmd/tasks                     host CLI + bundled backend server
 cmd/tasks-plugin-github       external GitHub plugin
 internal/cli                  commands, output, init/doctor
 internal/cli/tui              Bubble Tea board
 internal/config               config merge and paths
 internal/pluginmgr            discovery, go-plugin client, install
 pkg/sdk                       public plugin contract
-plugins/sqlite                built-in SQLite backend
-plugins/github                GitHub Projects backend
+plugins/*                     backend implementations
 proto/backend.proto           plugin RPC definition
 skills/tasks/SKILL.md         agent workflow
+docs/backends/                backend documentation
 ```
-
-SQLite concurrency uses WAL, `busy_timeout`, and foreign keys, so a human and
-several agents can use the same board.

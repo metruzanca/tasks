@@ -17,7 +17,10 @@ func (a *App) initCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Configure a backend and board",
 		Long: `Write a config file. Use --backend github with --owner, --project, and
---repo for GitHub Projects, or leave the defaults for the local SQLite board.`,
+--repo for GitHub Projects, or leave the defaults for the local SQLite board.
+
+SQLite boards are stored per repository at .tasks/tasks.db unless sqlite.path
+is set explicitly. Use --db to opt into a shared board.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := a.load()
 			if err != nil {
@@ -63,12 +66,28 @@ func (a *App) initCmd() *cobra.Command {
 				}
 				path = filepath.Join(cwd, ".tasks.toml")
 			}
-			if err := s.Write(path, isRepo); err != nil {
-				return err
+			runtimeSQLitePath := s.Config.SQLite.Path
+			writeSQLitePath := runtimeSQLitePath
+			if !cmd.Flags().Changed("db") {
+				switch {
+				case isRepo && s.RepoSqlitePathSet:
+					writeSQLitePath = s.RepoSqlitePath
+				case !isRepo && s.GlobalSQLitePathSet:
+					writeSQLitePath = s.GlobalSQLitePath
+				default:
+					// Do not bake the per-repo default into a config file.
+					writeSQLitePath = ""
+				}
+			}
+			s.Config.SQLite.Path = writeSQLitePath
+			writeErr := s.Write(path, isRepo)
+			s.Config.SQLite.Path = runtimeSQLitePath
+			if writeErr != nil {
+				return writeErr
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", path)
-			if _, err := os.Stat(s.Config.SQLite.Path); err != nil && backend == "sqlite" {
-				fmt.Fprintf(cmd.OutOrStdout(), "SQLite database will be created at %s\n", s.Config.SQLite.Path)
+			if backend == "sqlite" {
+				fmt.Fprintf(cmd.OutOrStdout(), "SQLite database: %s\n", s.Config.SQLite.Path)
 			}
 			sess, err := a.manager.Open(cmd.Context(), backend)
 			if err != nil {
@@ -117,6 +136,12 @@ func (a *App) configCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "repo:   %s\n", s.RepoPath)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "data:   %s\n", s.DataDir)
+			if s.RepoRoot != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "repo root: %s\n", s.RepoRoot)
+			}
+			if s.Config.Backend == "sqlite" {
+				fmt.Fprintf(cmd.OutOrStdout(), "database:  %s\n", s.Config.SQLite.Path)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "plugins: %s\n", s.Config.PluginDir)
 			return nil
 		},
@@ -164,6 +189,9 @@ func (a *App) doctorCmd() *cobra.Command {
 			}
 			fmt.Fprintf(w, "backend: %s\n", s.Config.Backend)
 			fmt.Fprintf(w, "plugins: %s\n", s.Config.PluginDir)
+			if s.Config.Backend == "sqlite" {
+				fmt.Fprintf(w, "database: %s\n", s.Config.SQLite.Path)
+			}
 			external, _ := a.manager.List()
 			for _, p := range external {
 				fmt.Fprintf(w, "  found %s at %s\n", p.Name, p.Path)

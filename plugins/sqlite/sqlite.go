@@ -70,8 +70,17 @@ func New(cfg Config) (*Backend, error) {
 	if cfg.Path == "" {
 		return nil, errors.New("sqlite path is empty")
 	}
-	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
+	dir := filepath.Dir(cfg.Path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
+	}
+	// Board data lives in .tasks/ inside a repository. Keep it out of git
+	// without requiring changes to the repository's own .gitignore.
+	if filepath.Base(dir) == ".tasks" {
+		ignore := filepath.Join(dir, ".gitignore")
+		if _, err := os.Stat(ignore); errors.Is(err, os.ErrNotExist) {
+			_ = os.WriteFile(ignore, []byte("*\n"), 0o644)
+		}
 	}
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(5000)")
