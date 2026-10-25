@@ -28,10 +28,6 @@ run = 'mkdir -p "${BIN:-bin}" && go build -o "${BIN:-bin}/tasks-plugin-github" .
 description = "Build a standalone Linear plugin binary (optional; Linear is native)"
 run = 'mkdir -p "${BIN:-bin}" && go build -o "${BIN:-bin}/tasks-plugin-linear" ./cmd/tasks-plugin-linear'
 
-[tasks.install]
-description = "Install the tasks CLI with go install"
-run = 'go install -ldflags "-X main.version=${VERSION:-dev}" .'
-
 [tasks.test]
 description = "Run the test suite"
 run = "go test ./..."
