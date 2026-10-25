@@ -1,18 +1,21 @@
 # tasks
 
-A terminal kanban board for you and your coding agent.
+A terminal kanban board for you and your coding agent, with native Linear sync.
 
 A `todo.md` works until two workers need it. Agents rewrite it, lose the
 ordering, and cannot filter it; notes and research drown the actual work.
 `tasks` gives you one structured board that both the TUI and an agent can use.
-It stores actionable project work, not notes, research, or conversation history.
+Keep it local or point it at the Linear team your startup already runs on. It
+stores actionable project work, not notes, research, or conversation history.
 
 ## What it does
 
+- Native Linear sync: workflow states become columns, and issues, labels,
+  assignees, priorities, and comments stay in sync.
 - Interactive terminal board, plus a scriptable CLI.
 - Stable `--json` output so agents can read and update work without parsing prose.
 - Statuses, priorities, labels, assignees, and comments.
-- Local SQLite board by default, with optional GitHub Projects or Linear sync.
+- Local SQLite board by default, with GitHub Projects also supported.
 - One board per repository by default, with no server or account required.
 
 ## Install
@@ -41,6 +44,21 @@ tasks board
 
 Inside a git repository, the default SQLite board lives in `.tasks/tasks.db` and
 is kept out of git automatically.
+
+## Linear
+
+Already planning work in Linear? Connect a team and use the terminal against
+your real issues:
+
+```sh
+tasks init --backend linear --team ENG
+tasks login linear
+tasks next
+tasks board
+```
+
+Your team's workflow states become the columns. See
+[docs/backends/linear.md](docs/backends/linear.md) for setup and details.
 
 ## Agents
 
@@ -76,13 +94,13 @@ Linear. Use the value printed by `add` or returned in JSON.
 
 ## Backends
 
-SQLite, GitHub Projects, and Linear are native and compiled into the CLI.
+Linear, GitHub Projects, and SQLite are native and compiled into the CLI.
 
 | Backend | Use |
 | --- | --- |
-| SQLite | Local board, default, no account needed. [Docs](docs/backends/sqlite.md) |
+| Linear | Sync a team's issues and workflow states. [Docs](docs/backends/linear.md) |
 | GitHub Projects | Sync issues to a GitHub project board. [Docs](docs/backends/github.md) |
-| Linear | Sync a Linear team's issues and workflow states. [Docs](docs/backends/linear.md) |
+| SQLite | Local board, default, no account needed. [Docs](docs/backends/sqlite.md) |
 
 ## Board
 
