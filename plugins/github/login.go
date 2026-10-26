@@ -14,6 +14,14 @@ import (
 // Login implements sdk.Authenticator.
 func (b *Backend) Login(ctx context.Context, input string, hasInput bool) (*pb.LoginResponse, error) {
 	if !hasInput {
+		if token, err := resolveToken(ctx, b.cfg.TokenEnv); err == nil && token != "" {
+			if login, err := b.client.viewerWithToken(ctx, token); err == nil {
+				return &pb.LoginResponse{
+					Done:    true,
+					Message: "Already logged in to GitHub as " + login,
+				}, nil
+			}
+		}
 		return &pb.LoginResponse{
 			Prompt:  "GitHub token (blank uses `gh auth token`): ",
 			Secret:  true,

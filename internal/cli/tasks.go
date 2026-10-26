@@ -15,6 +15,28 @@ import (
 
 func printJSON(w io.Writer, v any) error { return render.JSON(w, v) }
 
+func (a *App) taskCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "task",
+		Short: "Manage tasks",
+		Long:  "Create, list, edit, move, comment on, and remove tasks.",
+	}
+	cmd.AddCommand(
+		a.addCmd(),
+		a.listCmd(),
+		a.showCmd(),
+		a.editCmd(),
+		a.moveCmd(),
+		a.doneCmd(),
+		a.nextCmd(),
+		a.commentCmd(),
+		a.commentsCmd(),
+		a.archiveCmd(),
+		a.rmCmd(),
+	)
+	return cmd
+}
+
 func (a *App) addCmd() *cobra.Command {
 	var (
 		desc, status, priority, assignee string
@@ -448,30 +470,6 @@ func (a *App) rmCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&hard, "hard", false, "permanently delete")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm destructive action")
 	return cmd
-}
-
-func (a *App) columnsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "columns",
-		Short: "List board columns",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			s, err := a.open(ctx)
-			if err != nil {
-				return err
-			}
-			defer s.Close()
-			info, err := s.Backend.Describe(ctx)
-			if err != nil {
-				return err
-			}
-			if a.jsonOut {
-				return printJSON(cmd.OutOrStdout(), info)
-			}
-			render.ColumnsTable(cmd.OutOrStdout(), info.Columns, info.ReadyStatus)
-			return nil
-		},
-	}
 }
 
 func splitList(in []string) []string {

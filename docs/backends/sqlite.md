@@ -19,7 +19,7 @@ Each repository gets an isolated board by default. A global `[sqlite] path` in
 
 ```sh
 tasks init
-tasks add "Fix expired session redirect" -p high -l bug
+tasks task add "Fix expired session redirect" -p high -l bug
 tasks board
 ```
 
@@ -57,7 +57,7 @@ ready_status = "todo"
 
 - `path`: explicit database path. Also enables sharing between repositories.
 - `me`: value used for `--assignee @me` and as the comment author.
-- `ready_status`: column used by `tasks next`. Defaults to `todo`.
+- `ready_status`: column used by `tasks task next`. Defaults to `todo`.
 
 Environment overrides:
 

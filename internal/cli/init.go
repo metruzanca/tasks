@@ -1,89 +1,92 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/metruzanca/tasks/internal/config"
 	"github.com/metruzanca/tasks/internal/native"
 	"github.com/metruzanca/tasks/pkg/sdk"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func (a *App) initCmd() *cobra.Command {
 	var (
 		db, owner, repo, statusField, priorityField, write string
-		team, oauthClientID, tokenEnv                      string
+		team, oauthClientID, tokenEnv, readyStatus         string
 		project                                            int
+		forceInteractive                                   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Configure a backend and board",
-		Long: `Write a config file. Use --backend github with --owner, --project, and
---repo for GitHub Projects, --backend linear with --team for Linear, or leave
-the defaults for the local SQLite board.
+		Long: `Walk through choosing a backend and writing its config.
+
+Flags skip the form, so the command also works without a terminal. Credentials
+are never written to config. Run tasks auth login <backend> after initializing
+if the backend needs them.
 
 SQLite boards are stored per repository at .tasks/tasks.db unless sqlite.path
-is set explicitly. Use --db to opt into a shared board.
-
-Credentials are never written to config. Run tasks login <backend> after
-initializing.`,
+is set explicitly. Use --db to opt into a shared board.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := a.load()
 			if err != nil {
 				return err
 			}
-			backend := a.backend
-			if backend == "" {
-				backend = s.Config.Backend
+			interactive := forceInteractive || (term.IsTerminal(int(os.Stdin.Fd())) && !hasInitFlags(cmd, a.backend))
+
+			v := initValues{
+				Backend:       a.backend,
+				Write:         write,
+				DB:            db,
+				DBSet:         cmd.Flags().Changed("db"),
+				Owner:         owner,
+				Project:       project,
+				Repo:          repo,
+				StatusField:   statusField,
+				PriorityField: priorityField,
+				Team:          team,
+				ReadyStatus:   readyStatus,
+				OAuthClientID: oauthClientID,
+				TokenEnv:      tokenEnv,
 			}
-			if backend == "" {
-				backend = "sqlite"
+			fillInitDefaults(cmd, s, &v, interactive)
+			if v.Write != "global" && v.Write != "repo" {
+				return fmt.Errorf("--write must be global or repo")
 			}
-			s.Config.Backend = backend
-			if db != "" {
-				s.Config.SQLite.Path = db
+
+			if interactive {
+				if err := a.runInitForm(cmd, s, &v); err != nil {
+					if errors.Is(err, errInitCancelled) {
+						fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
+						return nil
+					}
+					return err
+				}
 			}
-			if owner != "" {
-				s.Config.GitHub.Owner = owner
+
+			if err := validateInitValues(&v); err != nil {
+				return err
 			}
-			if project != 0 {
-				s.Config.GitHub.Project = project
-			}
-			if repo != "" {
-				s.Config.GitHub.Repo = repo
-			}
-			if statusField != "" {
-				s.Config.GitHub.StatusField = statusField
-			}
-			if priorityField != "" {
-				s.Config.GitHub.PriorityField = priorityField
-			}
-			if team != "" {
-				s.Config.Linear.Team = team
-			}
-			if oauthClientID != "" {
-				s.Config.Linear.OAuthClientID = oauthClientID
-			}
-			if tokenEnv != "" {
-				switch backend {
+			applyInitValues(s, &v)
+			if cmd.Flags().Changed("token-env") {
+				switch v.Backend {
 				case "github":
 					s.Config.GitHub.TokenEnv = tokenEnv
 				case "linear":
 					s.Config.Linear.TokenEnv = tokenEnv
 				}
 			}
-			if backend == "github" {
-				if s.Config.GitHub.Owner == "" || s.Config.GitHub.Project == 0 || s.Config.GitHub.Repo == "" {
-					return fmt.Errorf("github requires --owner, --project, and --repo")
-				}
+			if cmd.Flags().Changed("oauth-client-id") && v.Backend == "linear" {
+				s.Config.Linear.OAuthClientID = oauthClientID
 			}
-			if backend == "linear" && s.Config.Linear.Team == "" {
-				return fmt.Errorf("linear requires --team")
-			}
+
+			isRepo := v.Write == "repo"
 			path := s.GlobalPath
-			isRepo := write == "repo"
 			if isRepo {
 				cwd, err := os.Getwd()
 				if err != nil {
@@ -91,9 +94,10 @@ initializing.`,
 				}
 				path = filepath.Join(cwd, ".tasks.toml")
 			}
+
 			runtimeSQLitePath := s.Config.SQLite.Path
 			writeSQLitePath := runtimeSQLitePath
-			if !cmd.Flags().Changed("db") {
+			if !v.DBSet {
 				switch {
 				case isRepo && s.RepoSqlitePathSet:
 					writeSQLitePath = s.RepoSqlitePath
@@ -111,42 +115,162 @@ initializing.`,
 				return writeErr
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", path)
-			if backend == "sqlite" {
+			if v.Backend == "sqlite" {
 				fmt.Fprintf(cmd.OutOrStdout(), "SQLite database: %s\n", s.Config.SQLite.Path)
 			}
-			sess, err := a.manager.Open(cmd.Context(), backend)
+
+			if interactive && (v.Backend == "github" || v.Backend == "linear") {
+				fmt.Fprintln(cmd.OutOrStdout())
+				fmt.Fprintln(cmd.OutOrStdout(), "Authentication:")
+				if err := a.loginBackend(cmd, v.Backend); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: login: %v\n", err)
+				}
+			}
+
+			sess, err := a.manager.Open(cmd.Context(), v.Backend)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
 				return nil
 			}
 			defer sess.Close()
-			if msgs, err := sess.Backend.Setup(cmd.Context(), true); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: setup: %v\n", err)
+			msgs, setupErr := sess.Backend.Setup(cmd.Context(), true)
+			info, err := sess.Backend.Describe(cmd.Context())
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
+				if needsLoginHint(v.Backend, err) {
+					fmt.Fprintf(cmd.OutOrStdout(), "Next: tasks auth login %s\n", v.Backend)
+				}
+				return nil
+			}
+			if setupErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: setup: %v\n", setupErr)
 			} else {
 				for _, msg := range msgs {
 					fmt.Fprintln(cmd.OutOrStdout(), "setup: "+msg)
 				}
 			}
-			info, err := sess.Backend.Describe(cmd.Context())
-			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
-				return nil
-			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Backend: %s (%s)\n", info.DisplayName, info.BoardName)
+			fmt.Fprintln(cmd.OutOrStdout(), "Run `tasks board` to get started.")
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&write, "write", "global", "where to write config: global or repo")
 	cmd.Flags().StringVar(&db, "db", "", "SQLite database path")
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub user or organization")
-	cmd.Flags().IntVar(&project, "project", 0, "GitHub project number")
+	cmd.Flags().IntVar(&project, "project", 0, "GitHub project number (from the project URL)")
 	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository (owner/name)")
 	cmd.Flags().StringVar(&statusField, "status-field", "", "GitHub status single-select field")
 	cmd.Flags().StringVar(&priorityField, "priority-field", "", "GitHub priority single-select field")
 	cmd.Flags().StringVar(&team, "team", "", "Linear team key or ID")
+	cmd.Flags().StringVar(&readyStatus, "ready-status", "", "Linear ready workflow state")
 	cmd.Flags().StringVar(&oauthClientID, "oauth-client-id", "", "Linear OAuth app client ID")
 	cmd.Flags().StringVar(&tokenEnv, "token-env", "", "environment variable to read the token from")
+	cmd.Flags().BoolVar(&forceInteractive, "interactive", false, "show the form even when flags are set")
 	return cmd
+}
+
+func fillInitDefaults(cmd *cobra.Command, s *config.Settings, v *initValues, interactive bool) {
+	if v.Backend == "" {
+		v.Backend = s.Config.Backend
+	}
+	if v.Backend == "" {
+		v.Backend = "sqlite"
+	}
+	if !cmd.Flags().Changed("write") {
+		v.Write = "global"
+		if interactive && s.RepoRoot != "" {
+			v.Write = "repo"
+		}
+	}
+	if !cmd.Flags().Changed("owner") {
+		v.Owner = s.Config.GitHub.Owner
+	}
+	if !cmd.Flags().Changed("project") {
+		v.Project = s.Config.GitHub.Project
+	}
+	if !cmd.Flags().Changed("repo") {
+		v.Repo = s.Config.GitHub.Repo
+	}
+	if !cmd.Flags().Changed("status-field") {
+		v.StatusField = s.Config.GitHub.StatusField
+	}
+	if !cmd.Flags().Changed("priority-field") {
+		v.PriorityField = s.Config.GitHub.PriorityField
+	}
+	if !cmd.Flags().Changed("team") {
+		v.Team = s.Config.Linear.Team
+	}
+	if !cmd.Flags().Changed("ready-status") {
+		v.ReadyStatus = s.Config.Linear.ReadyStatus
+	}
+	if !cmd.Flags().Changed("oauth-client-id") {
+		v.OAuthClientID = s.Config.Linear.OAuthClientID
+	}
+	if !cmd.Flags().Changed("token-env") {
+		switch v.Backend {
+		case "github":
+			v.TokenEnv = s.Config.GitHub.TokenEnv
+		case "linear":
+			v.TokenEnv = s.Config.Linear.TokenEnv
+		}
+	}
+	if !cmd.Flags().Changed("db") {
+		v.DB = ""
+		v.DBSet = false
+		if interactive {
+			switch {
+			case v.Write == "repo" && s.RepoSqlitePathSet:
+				v.DB = s.RepoSqlitePath
+				v.DBSet = true
+			case v.Write == "global" && s.RepoRoot == "" && s.GlobalSQLitePathSet:
+				v.DB = s.GlobalSQLitePath
+				v.DBSet = true
+			}
+		}
+	}
+}
+
+func validateInitValues(v *initValues) error {
+	if v.Write != "global" && v.Write != "repo" {
+		return fmt.Errorf("--write must be global or repo")
+	}
+	switch v.Backend {
+	case "github":
+		if strings.TrimSpace(v.Owner) == "" || v.Project == 0 || strings.TrimSpace(v.Repo) == "" {
+			return fmt.Errorf("github requires an owner, a project number, and a repository")
+		}
+		v.Repo = normalizeRepo(v.Owner, v.Repo)
+		if !strings.Contains(v.Repo, "/") {
+			return fmt.Errorf("github repo %q must be owner/name", v.Repo)
+		}
+	case "linear":
+		if strings.TrimSpace(v.Team) == "" {
+			return fmt.Errorf("linear requires a team")
+		}
+	}
+	return nil
+}
+
+func applyInitValues(s *config.Settings, v *initValues) {
+	s.Config.Backend = v.Backend
+	if v.DBSet {
+		s.Config.SQLite.Path = v.DB
+	}
+	switch v.Backend {
+	case "github":
+		s.Config.GitHub.Owner = strings.TrimSpace(v.Owner)
+		s.Config.GitHub.Project = v.Project
+		s.Config.GitHub.Repo = normalizeRepo(v.Owner, v.Repo)
+		if v.StatusField != "" {
+			s.Config.GitHub.StatusField = v.StatusField
+		}
+		if v.PriorityField != "" {
+			s.Config.GitHub.PriorityField = v.PriorityField
+		}
+	case "linear":
+		s.Config.Linear.Team = strings.TrimSpace(v.Team)
+		s.Config.Linear.ReadyStatus = strings.TrimSpace(v.ReadyStatus)
+	}
 }
 
 func (a *App) configCmd() *cobra.Command {
@@ -268,4 +392,12 @@ func (a *App) doctorCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func needsLoginHint(backend string, err error) bool {
+	if backend != "github" && backend != "linear" {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "token") || strings.Contains(msg, "credential") || strings.Contains(msg, "auth")
 }

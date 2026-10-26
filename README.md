@@ -28,7 +28,11 @@ cd tasks
 go install .
 ```
 
-Then configure a board:
+Then configure a board. `tasks init` walks through choosing a backend and where
+to write the config, so a single project can get its own `.tasks.toml`. For
+GitHub it detects the current repository, lets you pick a project by name, and
+can create one with `gh` if none exists. The selected project is linked to the
+repository. Choosing GitHub or Linear also starts the login flow when needed:
 
 ```sh
 tasks init
@@ -37,8 +41,8 @@ tasks init
 ## Get started
 
 ```sh
-tasks add "Fix expired session redirect" -d "Repro: ..." -p high -l bug
-tasks next
+tasks task add "Fix expired session redirect" -d "Repro: ..." -p high -l bug
+tasks task next
 tasks board
 ```
 
@@ -52,8 +56,8 @@ your real issues:
 
 ```sh
 tasks init --backend linear --team ENG
-tasks login linear
-tasks next
+tasks auth login linear
+tasks task next
 tasks board
 ```
 
@@ -72,9 +76,9 @@ The skill tells agents to read the board first, claim work, comment with
 findings, and never delete tasks without asking. Agents get stable JSON:
 
 ```sh
-tasks next --json
-tasks move T-1 in_progress
-tasks comment T-1 "Cause: cookie path mismatch"
+tasks task next --json
+tasks task move T-1 in_progress
+tasks task comment T-1 "Cause: cookie path mismatch"
 ```
 
 ```json
@@ -90,7 +94,7 @@ tasks comment T-1 "Cause: cookie path mismatch"
 ```
 
 IDs look like `T-12` for SQLite, `42` / `#42` for GitHub, and `ENG-123` for
-Linear. Use the value printed by `add` or returned in JSON.
+Linear. Use the value printed by `tasks task add` or returned in JSON.
 
 ## Backends
 
@@ -111,23 +115,26 @@ cards, `enter` opens a task, `n` creates one, `f` filters, `r` refreshes, and
 ## Commands
 
 ```text
-tasks add "title" [-d desc] [-s status] [-p priority] [-l label] [-a @me]
-tasks list [--status s] [--label l] [--priority p] [--search text] [--all]
-tasks show <id>
-tasks edit <id> [--title t] [--description d] [--priority p] [--assignee a]
-tasks move <id> <status> [--before <id> | --after <id>]
-tasks done <id>
-tasks next
-tasks comment <id> "text"
-tasks comments <id>
-tasks archive <id>
-tasks rm <id> [--hard --yes]
-tasks columns
+tasks task add "title" [-d desc] [-s status] [-p priority] [-l label] [-a @me]
+tasks task list [--status s] [--label l] [--priority p] [--search text] [--all]
+tasks task show <id>
+tasks task edit <id> [--title t] [--description d] [--priority p] [--assignee a]
+tasks task move <id> <status> [--before <id> | --after <id>]
+tasks task done <id>
+tasks task next
+tasks task comment <id> "text"
+tasks task comments <id>
+tasks task archive <id>
+tasks task rm <id> [--hard --yes]
 tasks board
-tasks login [backend]
-tasks logout [backend]
+tasks board columns
+tasks auth login|logout [backend]
 tasks plugin list|install|remove|path
-tasks init|doctor|config|skill|version
+tasks init
+tasks config path|show
+tasks doctor
+tasks skill print|install
+tasks version
 ```
 
 Global flags: `--backend <name>`, `--json`, `--no-color`, `--verbose`. Run
@@ -145,7 +152,7 @@ Tokens are stored separately so config can be committed:
 ~/.local/share/tasks/credentials.toml
 ```
 
-Use `tasks login <backend>` and `tasks logout <backend>`. `TASKS_CREDENTIALS_FILE`
+Use `tasks auth login <backend>` and `tasks auth logout <backend>`. `TASKS_CREDENTIALS_FILE`
 overrides the path, and CI tokens such as `GH_TOKEN` and `LINEAR_API_KEY` still
 take precedence. See the backend docs and `tasks config show` for details.
 

@@ -18,7 +18,7 @@ const AuthPluginName = "auth"
 // CredentialsFileEnv carries the path to the shared credentials file.
 const CredentialsFileEnv = "TASKS_CREDENTIALS_FILE"
 
-// Authenticator is implemented by backends that support `tasks login`.
+// Authenticator is implemented by backends that support `tasks auth login`.
 type Authenticator interface {
 	Login(ctx context.Context, input string, hasInput bool) (*pb.LoginResponse, error)
 }

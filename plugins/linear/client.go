@@ -165,6 +165,15 @@ func (c *client) teamInfo(ctx context.Context) (*teamInfo, error) {
 	return c.team, c.teamErr
 }
 
+func (c *client) resetAuth() {
+	c.viewerOnce = sync.Once{}
+	c.viewer = nil
+	c.viewerErr = nil
+	c.teamOnce = sync.Once{}
+	c.team = nil
+	c.teamErr = nil
+}
+
 func (c *client) currentViewer(ctx context.Context) (*user, error) {
 	c.viewerOnce.Do(func() {
 		var out struct {
@@ -212,20 +221,20 @@ func (c *client) authHeader(ctx context.Context) (string, error) {
 	if creds["token"] != "" {
 		return creds["token"], nil
 	}
-	return "", errors.New("no Linear credentials found: run `tasks login linear`")
+	return "", errors.New("no Linear credentials found: run `tasks auth login linear`")
 }
 
 func (c *client) refresh(ctx context.Context, creds map[string]string) (string, error) {
 	refreshToken := creds["refresh_token"]
 	if refreshToken == "" {
-		return "", errors.New("Linear session expired: run `tasks login linear`")
+		return "", errors.New("Linear session expired: run `tasks auth login linear`")
 	}
 	clientID := creds["client_id"]
 	if clientID == "" {
 		clientID = c.oauthClientID()
 	}
 	if clientID == "" {
-		return "", errors.New("Linear session expired and no OAuth client ID is configured: run `tasks login linear`")
+		return "", errors.New("Linear session expired and no OAuth client ID is configured: run `tasks auth login linear`")
 	}
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
@@ -832,4 +841,26 @@ func sortOrderBetween(tasks []*pb.Task, neighborID string, before bool) (float64
 		return n + 1024, nil
 	}
 	return (n + tasks[idx+1].Position) / 2, nil
+}
+
+// Team describes a Linear team for selection UIs.
+type Team struct {
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+// ListTeams returns the teams visible to the configured credentials.
+func ListTeams(ctx context.Context, cfg Config) ([]Team, error) {
+	c := newClient(cfg)
+	const q = `query { teams { nodes { id key name } } }`
+	var out struct {
+		Teams struct {
+			Nodes []Team `json:"nodes"`
+		} `json:"teams"`
+	}
+	if err := c.graphql(ctx, q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Teams.Nodes, nil
 }

@@ -46,6 +46,13 @@ func (b *Backend) Login(ctx context.Context, input string, hasInput bool) (*pb.L
 		return b.finishOAuth(ctx, flow)
 	}
 
+	if u, err := b.client.currentViewer(ctx); err == nil {
+		return &pb.LoginResponse{
+			Done:    true,
+			Message: "Already logged in to Linear as " + u.label(),
+		}, nil
+	}
+
 	if clientID := b.client.oauthClientID(); clientID != "" {
 		return b.startOAuth(ctx, clientID)
 	}
@@ -72,6 +79,7 @@ func (b *Backend) loginWithAPIKey(ctx context.Context, key string) (*pb.LoginRes
 	}); err != nil {
 		return nil, err
 	}
+	b.client.resetAuth()
 	return &pb.LoginResponse{
 		Done:    true,
 		Message: "Logged in to Linear as " + u.label(),
@@ -237,6 +245,7 @@ func (b *Backend) finishOAuth(ctx context.Context, flow *oauthFlow) (*pb.LoginRe
 	if err := sdk.SaveCredential("linear", creds); err != nil {
 		return nil, err
 	}
+	b.client.resetAuth()
 	return &pb.LoginResponse{
 		Done:    true,
 		Message: "Logged in to Linear as " + u.label(),

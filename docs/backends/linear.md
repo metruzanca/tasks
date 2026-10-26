@@ -8,11 +8,13 @@ ordering are supported.
 ## Login
 
 ```sh
-tasks login linear
-tasks logout linear
+tasks auth login linear
+tasks auth logout linear
 ```
 
-Credentials are stored in `~/.local/share/tasks/credentials.toml` with `0600`
+Interactive `tasks init` also starts this login flow when you choose Linear. If
+you are already logged in, it lists your teams so you can pick one instead of
+typing the key. Credentials are stored in `~/.local/share/tasks/credentials.toml` with `0600`
 permissions, never in `config.toml` or `.tasks.toml`. Set
 `TASKS_CREDENTIALS_FILE` to use another path.
 
@@ -50,9 +52,9 @@ one.
 
 Access tokens expire after about 24 hours. The plugin refreshes them with the
 rotating refresh token and saves the new pair atomically. If refresh fails, run
-`tasks login linear` again.
+`tasks auth login linear` again.
 
-`tasks logout linear` removes the local token. It does not revoke the grant in
+`tasks auth logout linear` removes the local token. It does not revoke the grant in
 Linear. Revoke the application from Linear Settings > Applications if needed.
 
 ## Configuration
@@ -92,9 +94,9 @@ tasks init --backend linear --team ENG --write repo
 - Description: issue description in Markdown.
 - Labels, assignee, comments, and URL map to the issue's labels, assignee,
   comments, and URL.
-- Position: Linear's manual `sortOrder`. `tasks move --before/--after` and the
+- Position: Linear's manual `sortOrder`. `tasks task move --before/--after` and the
   TUI reorder keys compute a fractional order between neighbors.
-- `tasks archive` archives the issue. `tasks rm --hard --yes` permanently deletes
+- `tasks task archive` archives the issue. `tasks task rm --hard --yes` permanently deletes
   it with `issueDelete`.
 
 ## Limitations
@@ -106,4 +108,4 @@ tasks init --backend linear --team ENG --write repo
   250 entries.
 - `issueDelete` is permanent and may require workspace permissions.
 - List responses report `comment_count: 0` because Linear does not expose a
-  cheap comment count. `tasks show` returns the real count.
+  cheap comment count. `tasks task show` returns the real count.

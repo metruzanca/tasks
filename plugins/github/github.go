@@ -88,7 +88,7 @@ func resolveToken(ctx context.Context, envName string) (string, error) {
 			return t, nil
 		}
 	}
-	return "", errors.New("no GitHub token found: run `tasks login github`, set GH_TOKEN/GITHUB_TOKEN, or run `gh auth login`")
+	return "", errors.New("no GitHub token found: run `tasks auth login github`, set GH_TOKEN/GITHUB_TOKEN, or run `gh auth login`")
 }
 
 func (b *Backend) Describe(ctx context.Context) (*pb.BackendInfo, error) {

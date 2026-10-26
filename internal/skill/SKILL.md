@@ -12,21 +12,22 @@ it unless the user asks for a task. Add real, actionable work only.
 ## Workflow
 
 1. Find the current work:
-   - `tasks next --json` returns the highest-priority ready task or `null`.
-   - `tasks list --status todo --json` lists ready work.
-   - `tasks list --json --status in_progress` shows what is already claimed.
+   - `tasks task next --json` returns the highest-priority ready task or `null`.
+   - `tasks task list --status todo --json` lists ready work.
+   - `tasks task list --json --status in_progress` shows what is already claimed.
 2. Claim work before starting:
-   - `tasks move <id> in_progress --assignee @me`
-   - `tasks comment <id> "Starting: <short plan>"`
+   - `tasks task move <id> in_progress`
+   - `tasks task edit <id> --assignee @me`
+   - `tasks task comment <id> "Starting: <short plan>"`
 3. Record new work discovered during the task as a separate, specific task:
-   - `tasks add "Fix expired session redirect" -d "Repro: ..." -p high -l bug`
-   - Search first (`tasks list --search "..." --all --json`) to avoid duplicates.
+   - `tasks task add "Fix expired session redirect" -d "Repro: ..." -p high -l bug`
+   - Search first (`tasks task list --search "..." --all --json`) to avoid duplicates.
 4. Record findings that matter to the next person:
-   - `tasks comment <id> "Cause: ..."`
+   - `tasks task comment <id> "Cause: ..."`
 5. Finish only when it is true:
-   - `tasks done <id>`
+   - `tasks task done <id>`
    - Move to review instead when the user needs to verify:
-     `tasks move <id> in_review`
+     `tasks task move <id> in_review`
 
 ## Rules
 
@@ -42,16 +43,16 @@ it unless the user asks for a task. Add real, actionable work only.
 ## Commands
 
 ```
-tasks next --json
-tasks list --json [--status todo] [--label bug] [--priority high] [--search text]
-tasks show <id> --json
-tasks add "title" -d "details" -p high -l bug
-tasks move <id> in_progress|in_review|done
-tasks edit <id> --title "..." --description "..." --priority high
-tasks comment <id> "text"
-tasks comments <id> --json
-tasks columns --json
+tasks task next --json
+tasks task list --json [--status todo] [--label bug] [--priority high] [--search text]
+tasks task show <id> --json
+tasks task add "title" -d "details" -p high -l bug
+tasks task move <id> in_progress|in_review|done
+tasks task edit <id> --title "..." --description "..." --priority high
+tasks task comment <id> "text"
+tasks task comments <id> --json
+tasks board columns --json
 ```
 
 IDs look like `T-12` for SQLite, `42` / `#42` for GitHub, and `ENG-123` for
-Linear. Use the ID printed by `add` or returned in JSON.
+Linear. Use the ID printed by `tasks task add` or returned in JSON.

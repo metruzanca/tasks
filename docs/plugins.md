@@ -45,7 +45,7 @@ tasks doctor
 renders tables, JSON, and the TUI, so a plugin only implements persistence
 semantics. The protocol is defined in `proto/backend.proto`.
 
-If your backend supports `tasks login`, implement `sdk.Authenticator` as well.
+If your backend supports `tasks auth login`, implement `sdk.Authenticator` as well.
 The host exposes it through the optional auth service, and plugins can store
 tokens with the helpers in `pkg/sdk/credentials.go`. Credentials live in the
 file named by `TASKS_CREDENTIALS_FILE`, not in the config file.

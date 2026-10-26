@@ -42,7 +42,7 @@ func NewFromEnv() (*Backend, error) {
 }
 
 // New constructs a Linear backend. Credentials are resolved lazily so that
-// `tasks login linear` can open the plugin without a token.
+// `tasks auth login linear` can open the plugin without a token.
 func New(cfg Config) (*Backend, error) {
 	if cfg.Team == "" {
 		return nil, errors.New("linear team is not configured (run `tasks init --backend linear --team <key>`)")
