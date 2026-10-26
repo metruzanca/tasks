@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +30,29 @@ type loadedMsg struct {
 	info    *pb.BackendInfo
 	message string
 	focusID string
+	err     error
+	tracked bool
+}
+
+const moveDebounce = 250 * time.Millisecond
+
+type pendingMove struct {
+	desired           *pb.MoveTaskRequest
+	desiredPosition   float64
+	sent              *pb.MoveTaskRequest
+	sentPosition      float64
+	inFlight          bool
+	confirmedStatus   string
+	confirmedPosition float64
+}
+
+type moveFlushMsg struct {
+	seq int
+}
+
+type moveResultMsg struct {
+	taskID  string
+	request *pb.MoveTaskRequest
 	err     error
 }
 
@@ -126,12 +150,17 @@ type Model struct {
 	lastClickID string
 	lastClickAt time.Time
 
+	moves    map[string]*pendingMove
+	moveSeq  int
+	ops      int
+	quitting bool
+
 	input textinput.Model
 }
 
 // Run starts the board.
 func Run(ctx context.Context, backend sdk.Backend) error {
-	m := &Model{ctx: ctx, backend: backend, width: 120, height: 40}
+	m := &Model{ctx: ctx, backend: backend, width: 120, height: 40, moves: map[string]*pendingMove{}}
 	m.input = textinput.New()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
@@ -165,12 +194,234 @@ func (m *Model) action(fn func() error, message string) tea.Cmd {
 }
 
 func (m *Model) actionFocus(fn func() error, message, focusID string) tea.Cmd {
+	m.ops++
 	return func() tea.Msg {
 		if err := fn(); err != nil {
-			return loadedMsg{err: err}
+			return loadedMsg{err: err, tracked: true}
 		}
-		return m.loadFocus(message, focusID)()
+		msg := m.loadFocus(message, focusID)()
+		if lm, ok := msg.(loadedMsg); ok {
+			lm.tracked = true
+			return lm
+		}
+		return msg
 	}
+}
+
+func (m *Model) requestQuit() (tea.Model, tea.Cmd) {
+	if len(m.moves) == 0 && m.ops == 0 {
+		return m, tea.Quit
+	}
+	m.quitting = true
+	m.message = "Saving changes..."
+	m.moveSeq++
+	cmd := m.flushMoves()
+	if cmd == nil && len(m.moves) == 0 && m.ops == 0 {
+		return m, tea.Quit
+	}
+	return m, cmd
+}
+
+func (m *Model) scheduleMoveFlush() tea.Cmd {
+	m.moveSeq++
+	seq := m.moveSeq
+	return tea.Tick(moveDebounce, func(time.Time) tea.Msg {
+		return moveFlushMsg{seq: seq}
+	})
+}
+
+func (m *Model) flushMoves() tea.Cmd {
+	var cmds []tea.Cmd
+	for id, state := range m.moves {
+		if state.inFlight || state.desired == nil {
+			continue
+		}
+		state.sent = state.desired
+		state.sentPosition = state.desiredPosition
+		state.desired = nil
+		state.inFlight = true
+		req := state.sent
+		taskID := id
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+			defer cancel()
+			_, err := m.backend.MoveTask(ctx, req)
+			return moveResultMsg{taskID: taskID, request: req, err: err}
+		})
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) handleMoveResult(msg moveResultMsg) (tea.Model, tea.Cmd) {
+	state := m.moves[msg.taskID]
+	if state == nil {
+		return m, nil
+	}
+	state.inFlight = false
+	if msg.err != nil {
+		if state.desired != nil {
+			// A newer move supersedes the failed request.
+			if m.quitting {
+				return m, m.flushMoves()
+			}
+			return m, m.scheduleMoveFlush()
+		}
+		t := m.taskByID(msg.taskID)
+		if t != nil {
+			t.Status = state.confirmedStatus
+			t.Position = state.confirmedPosition
+			m.focusTask(t.Id)
+			m.clamp()
+		}
+		delete(m.moves, msg.taskID)
+		m.err = fmt.Errorf("move failed: %w", msg.err)
+		m.message = ""
+		if m.quitting {
+			m.quitting = false
+		}
+		return m, nil
+	}
+	if state.sent != nil {
+		state.confirmedStatus = state.sent.Status
+		state.confirmedPosition = state.sentPosition
+	} else if msg.request != nil {
+		state.confirmedStatus = msg.request.Status
+	}
+	state.sent = nil
+	if state.desired != nil {
+		if m.quitting {
+			return m, m.flushMoves()
+		}
+		return m, m.scheduleMoveFlush()
+	}
+	delete(m.moves, msg.taskID)
+	if m.quitting && len(m.moves) == 0 && m.ops == 0 {
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m *Model) queueMove(req *pb.MoveTaskRequest, follow bool, message string) tea.Cmd {
+	t := m.taskByID(req.Id)
+	if t == nil || m.info == nil {
+		return nil
+	}
+	if m.moves == nil {
+		m.moves = map[string]*pendingMove{}
+	}
+	state := m.moves[t.Id]
+	if state == nil {
+		state = &pendingMove{
+			confirmedStatus:   t.Status,
+			confirmedPosition: t.Position,
+		}
+		m.moves[t.Id] = state
+	}
+
+	pos := m.positionForMove(t, req)
+	t.Status = req.Status
+	t.Position = pos
+	state.desired = req
+	state.desiredPosition = pos
+	m.message = message
+	m.err = nil
+	if follow {
+		m.focusTask(t.Id)
+	}
+
+	if state.inFlight {
+		return nil
+	}
+	if strings.EqualFold(state.confirmedStatus, req.Status) && req.BeforeId == nil && req.AfterId == nil {
+		t.Status = state.confirmedStatus
+		t.Position = state.confirmedPosition
+		delete(m.moves, t.Id)
+		if follow {
+			m.focusTask(t.Id)
+		}
+		m.message = ""
+		return nil
+	}
+	return m.scheduleMoveFlush()
+}
+
+func (m *Model) applyPendingMoves() {
+	for id, state := range m.moves {
+		t := m.taskByID(id)
+		if t == nil {
+			continue
+		}
+		switch {
+		case state.desired != nil:
+			t.Status = state.desired.Status
+			t.Position = state.desiredPosition
+		case state.sent != nil:
+			t.Status = state.sent.Status
+			t.Position = state.sentPosition
+		}
+	}
+}
+
+func (m *Model) positionForMove(t *pb.Task, req *pb.MoveTaskRequest) float64 {
+	list := m.tasksInStatus(req.Status, t.Id)
+	if req.BeforeId != nil {
+		if pos, ok := relativePosition(list, *req.BeforeId, true); ok {
+			return pos
+		}
+	} else if req.AfterId != nil {
+		if pos, ok := relativePosition(list, *req.AfterId, false); ok {
+			return pos
+		}
+	}
+	if len(list) == 0 {
+		return 1024
+	}
+	return list[len(list)-1].Position + 1024
+}
+
+func (m *Model) tasksInStatus(status, excludeID string) []*pb.Task {
+	var out []*pb.Task
+	for _, t := range m.tasks {
+		if t.Archived || t.Id == excludeID || !strings.EqualFold(t.Status, status) {
+			continue
+		}
+		out = append(out, t)
+	}
+	sortTasks(out)
+	return out
+}
+
+func sortTasks(tasks []*pb.Task) {
+	sort.SliceStable(tasks, func(i, j int) bool {
+		return tasks[i].Position < tasks[j].Position
+	})
+}
+
+func relativePosition(tasks []*pb.Task, neighborID string, before bool) (float64, bool) {
+	idx := -1
+	for i, t := range tasks {
+		if t.Id == neighborID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return 0, false
+	}
+	pos := tasks[idx].Position
+	if before {
+		if idx == 0 {
+			return pos - 1024, true
+		}
+		return (tasks[idx-1].Position + pos) / 2, true
+	}
+	if idx == len(tasks)-1 {
+		return pos + 1024, true
+	}
+	return (pos + tasks[idx+1].Position) / 2, true
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -179,8 +430,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case loadedMsg:
+		if msg.tracked && m.ops > 0 {
+			m.ops--
+		}
 		if msg.err != nil {
 			m.err = msg.err
+			if m.quitting {
+				m.quitting = false
+				m.message = ""
+			}
 			return m, nil
 		}
 		m.err = nil
@@ -189,13 +447,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.tasks != nil {
 			m.tasks = msg.tasks
+			m.applyPendingMoves()
 		}
 		m.message = msg.message
 		if msg.focusID != "" {
 			m.focusTask(msg.focusID)
 		}
 		m.clamp()
+		if m.quitting && len(m.moves) == 0 && m.ops == 0 {
+			return m, tea.Quit
+		}
 		return m, nil
+	case moveFlushMsg:
+		if msg.seq != m.moveSeq {
+			return m, nil
+		}
+		return m, m.flushMoves()
+	case moveResultMsg:
+		return m.handleMoveResult(msg)
 	case tea.MouseMsg:
 		if m.mode == modeEdit {
 			return m.updateEditMouse(tea.MouseEvent(msg))
@@ -207,6 +476,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if m.quitting {
+			return m, nil
 		}
 		switch m.mode {
 		case modeFilter:
@@ -227,8 +499,12 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.drag = nil
 		return m, nil
 	case "q":
-		return m, tea.Quit
+		return m.requestQuit()
 	case "r":
+		if len(m.moves) > 0 {
+			m.message = "Saving changes..."
+			return m, nil
+		}
 		return m, m.load("Refreshed")
 	case "left":
 		if m.col > 0 {
@@ -366,16 +642,11 @@ func (m *Model) finishDrag(x, y int) (tea.Model, tea.Cmd) {
 	if strings.EqualFold(status, d.fromStatus) && req.BeforeId == nil && req.AfterId == nil {
 		return m, nil
 	}
-	m.col = target.col
-	m.row = 0
 	message := "Moved " + d.taskKey + " to " + status
 	if strings.EqualFold(status, d.fromStatus) {
 		message = "Reordered " + d.taskKey
 	}
-	return m, m.actionFocus(func() error {
-		_, err := m.backend.MoveTask(m.ctx, req)
-		return err
-	}, message, d.taskID)
+	return m, m.queueMove(req, true, message)
 }
 
 func (m *Model) cardAt(x, y int) (cardHit, bool) {
@@ -551,6 +822,7 @@ func (m *Model) deleteTask() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	id, key := e.taskID, e.taskKey
+	delete(m.moves, id)
 	m.mode = modeNormal
 	m.edit = nil
 	return m, m.action(func() error {
@@ -722,17 +994,19 @@ func (m *Model) saveEdit() (tea.Model, tea.Cmd) {
 	id := e.taskID
 	m.mode = modeNormal
 	m.edit = nil
-	return m, m.actionFocus(func() error {
-		if _, err := m.backend.UpdateTask(m.ctx, req); err != nil {
-			return err
-		}
-		if statusChanged {
-			if _, err := m.backend.MoveTask(m.ctx, &pb.MoveTaskRequest{Id: id, Status: status}); err != nil {
-				return err
-			}
-		}
-		return nil
+
+	updateCmd := m.actionFocus(func() error {
+		_, err := m.backend.UpdateTask(m.ctx, req)
+		return err
 	}, "Updated "+key, id)
+	if !statusChanged {
+		return m, updateCmd
+	}
+	moveCmd := m.queueMove(&pb.MoveTaskRequest{Id: id, Status: status}, true, "Moved "+key+" to "+status)
+	if moveCmd == nil {
+		return m, updateCmd
+	}
+	return m, tea.Batch(updateCmd, moveCmd)
 }
 
 func (m *Model) resolveFormStatus(value string) (string, []string, bool) {
@@ -790,10 +1064,7 @@ func (m *Model) moveColumn(delta int) tea.Cmd {
 	if strings.EqualFold(status, t.Status) {
 		return nil
 	}
-	return m.actionFocus(func() error {
-		_, err := m.backend.MoveTask(m.ctx, &pb.MoveTaskRequest{Id: t.Id, Status: status})
-		return err
-	}, "Moved "+t.Key+" to "+status, t.Id)
+	return m.queueMove(&pb.MoveTaskRequest{Id: t.Id, Status: status}, true, "Moved "+t.Key+" to "+status)
 }
 
 func (m *Model) reorder(delta int) tea.Cmd {
@@ -812,10 +1083,7 @@ func (m *Model) reorder(delta int) tea.Cmd {
 	} else {
 		req.AfterId = &neighbor.Id
 	}
-	return m.actionFocus(func() error {
-		_, err := m.backend.MoveTask(m.ctx, req)
-		return err
-	}, "Reordered "+t.Key, t.Id)
+	return m.queueMove(req, true, "Reordered "+t.Key)
 }
 
 func (m *Model) selected() *pb.Task {
@@ -830,18 +1098,7 @@ func (m *Model) columnTasks() []*pb.Task {
 	if m.info == nil || m.col < 0 || m.col >= len(m.info.Columns) {
 		return nil
 	}
-	name := m.info.Columns[m.col].Name
-	var out []*pb.Task
-	for _, t := range m.tasks {
-		if t.Archived || !strings.EqualFold(t.Status, name) {
-			continue
-		}
-		if m.filter != "" && !matches(t, m.filter) {
-			continue
-		}
-		out = append(out, t)
-	}
-	return out
+	return m.tasksFor(m.info.Columns[m.col].Name)
 }
 
 func matches(t *pb.Task, f string) bool {
@@ -1336,6 +1593,7 @@ func (m *Model) tasksFor(status string) []*pb.Task {
 		}
 		out = append(out, t)
 	}
+	sortTasks(out)
 	return out
 }
 

@@ -2,12 +2,15 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/metruzanca/tasks/pkg/sdk"
 	"github.com/metruzanca/tasks/pkg/sdk/pb"
 	"github.com/metruzanca/tasks/plugins/sqlite"
 )
@@ -35,9 +38,53 @@ func newTestModel(t *testing.T) (*Model, *sqlite.Backend, *pb.Task) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Model{ctx: ctx, backend: b, info: info, tasks: tasks, width: 140, height: 40}
+	m := &Model{ctx: ctx, backend: b, info: info, tasks: tasks, width: 140, height: 40, moves: map[string]*pendingMove{}}
 	m.input = textinput.New()
 	return m, b, task
+}
+
+func flushPendingMoves(t *testing.T, m *Model) {
+	t.Helper()
+	for len(m.moves) > 0 {
+		cmd := m.flushMoves()
+		if cmd == nil {
+			t.Fatalf("pending moves without a command: %+v", m.moves)
+		}
+		runMoveCmd(t, m, cmd())
+	}
+}
+
+func runMoveCmd(t *testing.T, m *Model, msg tea.Msg) {
+	t.Helper()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, cmd := range batch {
+			if cmd != nil {
+				runMoveCmd(t, m, cmd())
+			}
+		}
+		return
+	}
+	m.Update(msg)
+}
+
+func processMoveResult(t *testing.T, m *Model, msg tea.Msg) bool {
+	t.Helper()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		quit := false
+		for _, cmd := range batch {
+			if cmd != nil && processMoveResult(t, m, cmd()) {
+				quit = true
+			}
+		}
+		return quit
+	}
+	_, next := m.Update(msg)
+	if next != nil {
+		if _, ok := next().(tea.QuitMsg); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMouseDragMovesTaskBetweenColumns(t *testing.T) {
@@ -87,15 +134,10 @@ func TestMouseDragMovesTaskBetweenColumns(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("release did not produce a move command")
 	}
-	msg := cmd()
-	lm, ok := msg.(loadedMsg)
-	if !ok {
-		t.Fatalf("move command returned %T", msg)
+	if got := m.taskByID(task.Id); got == nil || got.Status != "in_progress" {
+		t.Fatalf("optimistic status = %+v", got)
 	}
-	if lm.err != nil {
-		t.Fatal(lm.err)
-	}
-	m.Update(msg)
+	flushPendingMoves(t, m)
 
 	got, err := b.GetTask(context.Background(), task.Id)
 	if err != nil {
@@ -165,11 +207,10 @@ func TestShiftArrowMovesCard(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("shift+right did not produce a move command")
 	}
-	msg := cmd()
-	if lm, ok := msg.(loadedMsg); ok && lm.err != nil {
-		t.Fatal(lm.err)
+	if got := m.taskByID(task.Id); got == nil || got.Status != "in_progress" {
+		t.Fatalf("optimistic status = %+v", got)
 	}
-	m.Update(msg)
+	flushPendingMoves(t, m)
 	got, err := b.GetTask(context.Background(), task.Id)
 	if err != nil {
 		t.Fatal(err)
@@ -206,18 +247,13 @@ func TestReorderMovesSelectionWithCard(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("shift+down did not produce a reorder command")
 	}
-	msg := cmd()
-	if lm, ok := msg.(loadedMsg); ok && lm.err != nil {
-		t.Fatal(lm.err)
-	}
-	m.Update(msg)
-
 	if sel := m.selected(); sel == nil || sel.Id != first.Id {
 		t.Fatalf("selection did not follow reordered card: %+v", sel)
 	}
 	if m.row != 1 {
 		t.Fatalf("row = %d, want 1 after moving down", m.row)
 	}
+	flushPendingMoves(t, m)
 }
 
 func TestMouseDropAnywhereInColumn(t *testing.T) {
@@ -252,11 +288,10 @@ func TestMouseDropAnywhereInColumn(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("drop below the header did not produce a move command")
 	}
-	msg := cmd()
-	if lm, ok := msg.(loadedMsg); ok && lm.err != nil {
-		t.Fatal(lm.err)
+	if got := m.taskByID(task.Id); got == nil || got.Status != "in_progress" {
+		t.Fatalf("optimistic status = %+v", got)
 	}
-	m.Update(msg)
+	flushPendingMoves(t, m)
 	got, err := b.GetTask(context.Background(), task.Id)
 	if err != nil {
 		t.Fatal(err)
@@ -549,11 +584,10 @@ func TestStatusFieldSavesAndMovesTask(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("save did not produce a command")
 	}
-	msg := cmd()
-	if lm, ok := msg.(loadedMsg); ok && lm.err != nil {
-		t.Fatal(lm.err)
+	if got := m.taskByID(task.Id); got == nil || got.Status != "in_progress" {
+		t.Fatalf("optimistic status = %+v", got)
 	}
-	m.Update(msg)
+	flushPendingMoves(t, m)
 	got, err := b.GetTask(context.Background(), task.Id)
 	if err != nil {
 		t.Fatal(err)
@@ -611,5 +645,173 @@ func TestDescriptionHasNoLineNumbers(t *testing.T) {
 	view := m.View()
 	if strings.Contains(view, "› ") {
 		t.Fatal("field labels still have a focus prefix")
+	}
+}
+
+type recordingBackend struct {
+	sdk.Backend
+	mu    sync.Mutex
+	moves []*pb.MoveTaskRequest
+	err   error
+}
+
+func (r *recordingBackend) MoveTask(ctx context.Context, req *pb.MoveTaskRequest) (*pb.Task, error) {
+	r.mu.Lock()
+	r.moves = append(r.moves, req)
+	err := r.err
+	r.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return r.Backend.MoveTask(ctx, req)
+}
+
+func (r *recordingBackend) recorded() []*pb.MoveTaskRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]*pb.MoveTaskRequest(nil), r.moves...)
+}
+
+func TestRapidMovesCoalesceToFinalStatus(t *testing.T) {
+	m, b, task := newTestModel(t)
+	rec := &recordingBackend{Backend: b}
+	m.backend = rec
+	m.col = 1
+	m.row = 0
+
+	m.queueMove(&pb.MoveTaskRequest{Id: task.Id, Status: "in_progress"}, true, "Moved")
+	m.queueMove(&pb.MoveTaskRequest{Id: task.Id, Status: "done"}, true, "Moved")
+	flushPendingMoves(t, m)
+
+	moves := rec.recorded()
+	if len(moves) != 1 {
+		t.Fatalf("sent %d moves, want 1: %+v", len(moves), moves)
+	}
+	if moves[0].Status != "done" {
+		t.Fatalf("sent status = %q, want done", moves[0].Status)
+	}
+	got, err := b.GetTask(context.Background(), task.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "done" {
+		t.Fatalf("backend status = %q, want done", got.Status)
+	}
+}
+
+func TestMoveFailureRollsBack(t *testing.T) {
+	m, b, task := newTestModel(t)
+	rec := &recordingBackend{Backend: b, err: errors.New("boom")}
+	m.backend = rec
+	m.col = 1
+	m.row = 0
+
+	m.queueMove(&pb.MoveTaskRequest{Id: task.Id, Status: "in_progress"}, true, "Moved")
+	if got := m.taskByID(task.Id); got == nil || got.Status != "in_progress" {
+		t.Fatalf("optimistic status = %+v", got)
+	}
+	flushPendingMoves(t, m)
+
+	if m.err == nil {
+		t.Fatal("expected an error")
+	}
+	if got := m.taskByID(task.Id); got == nil || got.Status != "todo" {
+		t.Fatalf("rolled back status = %+v", got)
+	}
+	if m.info.Columns[m.col].Name != "todo" {
+		t.Fatalf("selection column = %q, want todo", m.info.Columns[m.col].Name)
+	}
+	got, err := b.GetTask(context.Background(), task.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "todo" {
+		t.Fatalf("backend status = %q, want todo", got.Status)
+	}
+}
+
+func TestQuitWithoutPendingMoves(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("quit produced no command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("quit did not return a quit message")
+	}
+}
+
+func TestQuitFlushesPendingMoves(t *testing.T) {
+	m, b, task := newTestModel(t)
+	m.col = 1
+	m.row = 0
+	m.queueMove(&pb.MoveTaskRequest{Id: task.Id, Status: "in_progress"}, true, "Moved")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("quit did not flush pending moves")
+	}
+	if !m.quitting {
+		t.Fatal("quit did not enter the saving state")
+	}
+	if !processMoveResult(t, m, cmd()) {
+		t.Fatal("program did not quit after the move completed")
+	}
+	got, err := b.GetTask(context.Background(), task.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "in_progress" {
+		t.Fatalf("status = %q, want in_progress", got.Status)
+	}
+}
+
+func TestQuitWaitsForInflightMove(t *testing.T) {
+	m, _, task := newTestModel(t)
+	m.col = 1
+	m.row = 0
+	m.queueMove(&pb.MoveTaskRequest{Id: task.Id, Status: "in_progress"}, true, "Moved")
+
+	state := m.moves[task.Id]
+	state.sent = state.desired
+	state.sentPosition = state.desiredPosition
+	state.desired = nil
+	state.inFlight = true
+
+	_, quitCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if quitCmd != nil {
+		t.Fatal("quit should wait for the in-flight move")
+	}
+	if !m.quitting {
+		t.Fatal("quit did not enter the saving state")
+	}
+	_, next := m.Update(moveResultMsg{taskID: task.Id, request: state.sent})
+	if next == nil {
+		t.Fatal("completed move did not quit")
+	}
+	if _, ok := next().(tea.QuitMsg); !ok {
+		t.Fatal("completed move did not return a quit message")
+	}
+}
+
+func TestQuitWaitsForAction(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	cmd := m.action(func() error { return nil }, "Updated")
+	if cmd == nil || m.ops != 1 {
+		t.Fatalf("action did not start: cmd=%v ops=%d", cmd != nil, m.ops)
+	}
+	_, quitCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if quitCmd != nil {
+		t.Fatal("quit should wait for the in-flight action")
+	}
+	if !m.quitting {
+		t.Fatal("quit did not enter the saving state")
+	}
+	_, next := m.Update(cmd())
+	if next == nil {
+		t.Fatal("completed action did not quit")
+	}
+	if _, ok := next().(tea.QuitMsg); !ok {
+		t.Fatal("completed action did not return a quit message")
 	}
 }
