@@ -111,6 +111,10 @@ Linear, GitHub Projects, and SQLite are native and compiled into the CLI.
 `tasks board` opens the TUI. Arrows navigate, `shift+arrows` move or reorder
 cards, `enter` opens a task, `n` creates one, `f` filters, `r` refreshes, and
 `q` quits. Mouse clicks, double-clicks, drag-and-drop, and scrolling work too.
+Press `a` to show or hide archived tasks; archived cards are labeled. Status
+changes apply immediately and sync in the background; `q` waits for pending
+changes to finish saving. `tasks board --web` opens the backend's official board
+in your browser. SQLite has no web board.
 
 ## Commands
 

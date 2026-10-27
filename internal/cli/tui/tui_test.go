@@ -34,11 +34,11 @@ func newTestModel(t *testing.T) (*Model, *sqlite.Backend, *pb.Task) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := b.ListTasks(ctx, &pb.TaskFilter{})
+	tasks, err := b.ListTasks(ctx, &pb.TaskFilter{IncludeArchived: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Model{ctx: ctx, backend: b, info: info, tasks: tasks, width: 140, height: 40, moves: map[string]*pendingMove{}}
+	m := &Model{ctx: ctx, backend: b, info: info, tasks: tasks, width: 140, height: 40, moves: map[string]*pendingMove{}, showArchived: true}
 	m.input = textinput.New()
 	return m, b, task
 }
@@ -754,6 +754,9 @@ func TestQuitFlushesPendingMoves(t *testing.T) {
 	if !m.quitting {
 		t.Fatal("quit did not enter the saving state")
 	}
+	if !strings.Contains(m.View(), "Saving changes...") {
+		t.Fatal("saving status is not shown")
+	}
 	if !processMoveResult(t, m, cmd()) {
 		t.Fatal("program did not quit after the move completed")
 	}
@@ -813,5 +816,88 @@ func TestQuitWaitsForAction(t *testing.T) {
 	}
 	if _, ok := next().(tea.QuitMsg); !ok {
 		t.Fatal("completed action did not return a quit message")
+	}
+}
+
+func TestStatusMessageOnlyAfterSync(t *testing.T) {
+	m, _, task := newTestModel(t)
+	m.col = 1
+	m.row = 0
+	message := "Moved " + task.Key + " to in_progress"
+	m.queueMove(&pb.MoveTaskRequest{Id: task.Id, Status: "in_progress"}, true, message)
+
+	if m.message != "" {
+		t.Fatalf("message changed before sync: %q", m.message)
+	}
+	if !strings.Contains(m.View(), "Syncing...") {
+		t.Fatal("syncing status is not shown")
+	}
+
+	flushPendingMoves(t, m)
+	want := "Synced: " + message
+	if m.message != want {
+		t.Fatalf("message = %q, want %q", m.message, want)
+	}
+	view := m.View()
+	if !strings.Contains(view, want) {
+		t.Fatalf("synced message is not shown: %q", view)
+	}
+	if strings.Contains(view, "Syncing...") {
+		t.Fatal("syncing status is still shown after sync")
+	}
+}
+
+func TestArchivedVisibilityAndLabel(t *testing.T) {
+	m, b, task := newTestModel(t)
+	if err := b.DeleteTask(context.Background(), task.Id, false); err != nil {
+		t.Fatal(err)
+	}
+	msg := m.load("")()
+	m.Update(msg)
+
+	if !m.showArchived {
+		t.Fatal("archived tasks should be shown by default")
+	}
+	view := m.View()
+	if !strings.Contains(view, "[archived]") {
+		t.Fatalf("archived label is missing:\n%s", view)
+	}
+	if !strings.Contains(view, "No active tasks. Showing archived tasks.") {
+		t.Fatalf("missing archived-only notice:\n%s", view)
+	}
+	found := false
+	for _, h := range m.cardHits {
+		if h.taskID == task.Id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("archived task card was not rendered")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m.showArchived {
+		t.Fatal("a did not hide archived tasks")
+	}
+	view = m.View()
+	if strings.Contains(view, "[archived]") {
+		t.Fatal("archived label is still shown")
+	}
+	if !strings.Contains(view, "No active tasks. Press a to show archived tasks.") {
+		t.Fatalf("missing hidden-archived notice:\n%s", view)
+	}
+	for _, h := range m.cardHits {
+		if h.taskID == task.Id {
+			t.Fatal("archived task card is still rendered")
+		}
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if !m.showArchived {
+		t.Fatal("a did not show archived tasks")
+	}
+	view = m.View()
+	if !strings.Contains(view, "[archived]") {
+		t.Fatalf("archived label did not return:\n%s", view)
 	}
 }

@@ -13,12 +13,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/metruzanca/tasks/internal/browser"
 	"github.com/metruzanca/tasks/pkg/sdk"
 	"github.com/metruzanca/tasks/pkg/sdk/pb"
 )
@@ -160,7 +159,7 @@ func (b *Backend) startOAuth(ctx context.Context, clientID string) (*pb.LoginRes
 	}()
 
 	authURL := oauthAuthorizeURL(clientID, state, challenge)
-	if err := openBrowser(authURL); err != nil {
+	if err := browser.Open(authURL); err != nil {
 		oauthMu.Lock()
 		b.oauthFlow = flow
 		oauthMu.Unlock()
@@ -272,21 +271,4 @@ func randomToken(n int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func openBrowser(rawURL string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", rawURL)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
-	default:
-		cmd = exec.Command("xdg-open", rawURL)
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
 }

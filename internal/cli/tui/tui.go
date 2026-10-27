@@ -37,6 +37,7 @@ type loadedMsg struct {
 const moveDebounce = 250 * time.Millisecond
 
 type pendingMove struct {
+	message           string
 	desired           *pb.MoveTaskRequest
 	desiredPosition   float64
 	sent              *pb.MoveTaskRequest
@@ -150,17 +151,18 @@ type Model struct {
 	lastClickID string
 	lastClickAt time.Time
 
-	moves    map[string]*pendingMove
-	moveSeq  int
-	ops      int
-	quitting bool
+	moves        map[string]*pendingMove
+	moveSeq      int
+	ops          int
+	quitting     bool
+	showArchived bool
 
 	input textinput.Model
 }
 
 // Run starts the board.
 func Run(ctx context.Context, backend sdk.Backend) error {
-	m := &Model{ctx: ctx, backend: backend, width: 120, height: 40, moves: map[string]*pendingMove{}}
+	m := &Model{ctx: ctx, backend: backend, width: 120, height: 40, moves: map[string]*pendingMove{}, showArchived: true}
 	m.input = textinput.New()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
@@ -181,7 +183,7 @@ func (m *Model) loadFocus(message, focusID string) tea.Cmd {
 		if err != nil {
 			return loadedMsg{err: err}
 		}
-		tasks, err := m.backend.ListTasks(m.ctx, &pb.TaskFilter{})
+		tasks, err := m.backend.ListTasks(m.ctx, &pb.TaskFilter{IncludeArchived: true})
 		if err != nil {
 			return loadedMsg{err: err}
 		}
@@ -213,7 +215,6 @@ func (m *Model) requestQuit() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	m.quitting = true
-	m.message = "Saving changes..."
 	m.moveSeq++
 	cmd := m.flushMoves()
 	if cmd == nil && len(m.moves) == 0 && m.ops == 0 {
@@ -301,6 +302,9 @@ func (m *Model) handleMoveResult(msg moveResultMsg) (tea.Model, tea.Cmd) {
 	if m.quitting && len(m.moves) == 0 && m.ops == 0 {
 		return m, tea.Quit
 	}
+	if state.message != "" {
+		m.message = "Synced: " + state.message
+	}
 	return m, nil
 }
 
@@ -326,7 +330,8 @@ func (m *Model) queueMove(req *pb.MoveTaskRequest, follow bool, message string) 
 	t.Position = pos
 	state.desired = req
 	state.desiredPosition = pos
-	m.message = message
+	state.message = message
+	m.message = ""
 	m.err = nil
 	if follow {
 		m.focusTask(t.Id)
@@ -435,9 +440,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.err = msg.err
+			m.message = ""
 			if m.quitting {
 				m.quitting = false
-				m.message = ""
 			}
 			return m, nil
 		}
@@ -449,7 +454,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tasks = msg.tasks
 			m.applyPendingMoves()
 		}
-		m.message = msg.message
+		if msg.tracked && msg.message != "" {
+			m.message = "Synced: " + msg.message
+		} else {
+			m.message = msg.message
+		}
 		if msg.focusID != "" {
 			m.focusTask(msg.focusID)
 		}
@@ -500,9 +509,12 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "q":
 		return m.requestQuit()
+	case "a":
+		m.showArchived = !m.showArchived
+		m.row = 0
+		m.clamp()
 	case "r":
 		if len(m.moves) > 0 {
-			m.message = "Saving changes..."
 			return m, nil
 		}
 		return m, m.load("Refreshed")
@@ -1120,7 +1132,7 @@ func (m *Model) focusTask(id string) {
 	}
 	var target *pb.Task
 	for _, t := range m.tasks {
-		if t.Id == id && !t.Archived {
+		if t.Id == id && (!t.Archived || m.showArchived) {
 			target = t
 			break
 		}
@@ -1168,11 +1180,18 @@ func (m *Model) View() string {
 		meta += "  filter: " + m.filter
 	}
 	top := header + meta
-	if m.message != "" {
+	if m.quitting {
+		top += "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("Saving changes...")
+	} else if len(m.moves) > 0 || m.ops > 0 {
+		top += "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("Syncing...")
+	} else if m.message != "" {
 		top += "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render(m.message)
 	}
 	if m.err != nil {
 		top += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("error: "+m.err.Error())
+	}
+	if notice := m.emptyNotice(); notice != "" {
+		top += "\n" + lipgloss.NewStyle().Faint(true).Render(notice)
 	}
 
 	if m.drag != nil && m.drag.moved {
@@ -1549,6 +1568,9 @@ func (m *Model) renderCard(t *pb.Task, selected bool, width int) string {
 	if description != "" {
 		line += "\n" + lipgloss.NewStyle().Faint(true).Render(description)
 	}
+	if t.Archived {
+		line += "\n" + lipgloss.NewStyle().Faint(true).Render("[archived]")
+	}
 
 	borderColor := "8"
 	if selected {
@@ -1576,7 +1598,7 @@ func (m *Model) helpText() string {
 		nav = append(nav, "shift+↑/↓ reorder")
 	}
 	actions := []string{
-		"enter open", "n new", "f filter", "r refresh", "q quit",
+		"enter open", "n new", "a archived", "f filter", "r refresh", "q quit",
 		"drag cards with mouse",
 	}
 	return strings.Join(nav, "  ") + "\n" + strings.Join(actions, "  ")
@@ -1585,7 +1607,10 @@ func (m *Model) helpText() string {
 func (m *Model) tasksFor(status string) []*pb.Task {
 	var out []*pb.Task
 	for _, t := range m.tasks {
-		if t.Archived || !strings.EqualFold(t.Status, status) {
+		if t.Archived && !m.showArchived {
+			continue
+		}
+		if !strings.EqualFold(t.Status, status) {
 			continue
 		}
 		if m.filter != "" && !matches(t, m.filter) {
@@ -1595,6 +1620,43 @@ func (m *Model) tasksFor(status string) []*pb.Task {
 	}
 	sortTasks(out)
 	return out
+}
+
+func (m *Model) taskCounts() (active, archived int) {
+	for _, t := range m.tasks {
+		if t.Archived {
+			archived++
+		} else {
+			active++
+		}
+	}
+	return active, archived
+}
+
+func (m *Model) emptyNotice() string {
+	active, archived := m.taskCounts()
+	if active == 0 {
+		switch {
+		case archived == 0:
+			return "No tasks yet. Press n to create one."
+		case m.showArchived:
+			return "No active tasks. Showing archived tasks."
+		default:
+			return "No active tasks. Press a to show archived tasks."
+		}
+	}
+	if m.filter != "" {
+		for _, t := range m.tasks {
+			if t.Archived && !m.showArchived {
+				continue
+			}
+			if matches(t, m.filter) {
+				return ""
+			}
+		}
+		return "No tasks match the filter."
+	}
+	return ""
 }
 
 func truncate(s string, n int) string {

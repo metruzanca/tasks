@@ -15,6 +15,9 @@ Outside a repository, the board falls back to
 Each repository gets an isolated board by default. A global `[sqlite] path` in
 `~/.config/tasks/config.toml` is only used outside a repository.
 
+`tasks board --web` is not available because SQLite boards have no hosted web
+view.
+
 ## Setup
 
 ```sh

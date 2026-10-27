@@ -72,6 +72,7 @@ priority_field = "Priority"
 - Task ID: issue number. The display key is `#<number>`.
 - Board column: the value of the `Status` single-select field.
 - Priority: the value of the `Priority` single-select field.
+- `tasks board --web` opens the GitHub Project in your browser.
 - Description: issue body.
 - Labels, assignee, and comments map to the issue's labels, assignee, and
   comments.

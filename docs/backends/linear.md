@@ -91,6 +91,7 @@ tasks init --backend linear --team ENG --write repo
   `started` maps to in progress; `completed`, `canceled`, and `duplicate` map to
   done.
 - Priority: Linear `0/1/2/3/4` maps to none/urgent/high/medium/low.
+- `tasks board --web` opens the Linear team URL in your browser.
 - Description: issue description in Markdown.
 - Labels, assignee, comments, and URL map to the issue's labels, assignee,
   comments, and URL.
